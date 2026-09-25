@@ -6,7 +6,7 @@
 // simulate a logged-in session for UI development. This is NOT secure and
 // is not a substitute for real backend-issued, verified authentication.
 
-import { apiRequest, USE_MOCKS, mockDelay } from './api';
+import { mockDelay } from './api';
 
 const MOCK_USERS_KEY = 'mock_users';
 
@@ -23,36 +23,26 @@ function writeMockUsers(users) {
 }
 
 export async function login({ email, password }) {
-  if (USE_MOCKS) {
-    await mockDelay(600);
-    const users = readMockUsers();
-    const user = users.find((u) => u.email === email && u.password === password);
-    if (!user) {
-      throw new Error('Invalid email or password.');
-    }
-    const token = `mock-token-${user.id}`;
-    return { token, user: { id: user.id, name: user.name, email: user.email } };
+  await mockDelay(600);
+  const users = readMockUsers();
+  const user = users.find((u) => u.email === email && u.password === password);
+  if (!user) {
+    throw new Error('Invalid email or password.');
   }
-
-  // Real backend call: POST /api/auth/login
-  return apiRequest('/auth/login', { method: 'POST', body: { email, password } });
+  const token = `mock-token-${user.id}`;
+  return { token, user: { id: user.id, name: user.name, email: user.email } };
 }
 
 export async function register({ name, email, password }) {
-  if (USE_MOCKS) {
-    await mockDelay(600);
-    const users = readMockUsers();
-    if (users.some((u) => u.email === email)) {
-      throw new Error('An account with this email already exists.');
-    }
-    const newUser = { id: `u-${Date.now()}`, name, email, password };
-    writeMockUsers([...users, newUser]);
-    const token = `mock-token-${newUser.id}`;
-    return { token, user: { id: newUser.id, name: newUser.name, email: newUser.email } };
+  await mockDelay(600);
+  const users = readMockUsers();
+  if (users.some((u) => u.email === email)) {
+    throw new Error('An account with this email already exists.');
   }
-
-  // Real backend call: POST /api/auth/register
-  return apiRequest('/auth/register', { method: 'POST', body: { name, email, password } });
+  const newUser = { id: `u-${Date.now()}`, name, email, password };
+  writeMockUsers([...users, newUser]);
+  const token = `mock-token-${newUser.id}`;
+  return { token, user: { id: newUser.id, name: newUser.name, email: newUser.email } };
 }
 
 export function logout() {

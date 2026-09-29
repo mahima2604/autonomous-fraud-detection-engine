@@ -27,10 +27,6 @@ export async function analyzeTransaction(transactionPayload) {
 }
 
 export async function getRecentFraudPredictions() {
-  if (USE_MOCKS) {
-    await mockDelay(500);
-    return [];
-  }
   const response = await apiRequest('/admin/fraud/recent');
   return response.map(r => ({
     ...r,
@@ -41,9 +37,5 @@ export async function getRecentFraudPredictions() {
 }
 
 export async function getFraudSummary() {
-  if (USE_MOCKS) {
-    await mockDelay(500);
-    return { total_predictions: 0, risk_breakdown: { LOW: 0, MEDIUM: 0, HIGH: 0 } };
-  }
   return apiRequest('/admin/fraud/summary');
 }

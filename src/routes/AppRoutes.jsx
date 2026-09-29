@@ -21,6 +21,8 @@ import Payment from '../pages/Payment';
 import OrderSuccess from '../pages/OrderSuccess';
 import Orders from '../pages/Orders';
 import FraudDashboard from '../pages/admin/FraudDashboard';
+import AdminLogin from '../pages/admin/AdminLogin';
+import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
 
 function AppRoutes() {
   return (
@@ -45,7 +47,12 @@ function AppRoutes() {
 
       {/* Separate shell for the internal fraud-monitoring dashboard. */}
       <Route path="/admin" element={<AdminLayout />}>
-        <Route path="fraud-dashboard" element={<FraudDashboard />} />
+        <Route path="login" element={<AdminLogin />} />
+        <Route path="fraud-dashboard" element={
+          <AdminProtectedRoute>
+            <FraudDashboard />
+          </AdminProtectedRoute>
+        } />
       </Route>
     </Routes>
   );

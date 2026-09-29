@@ -18,34 +18,37 @@ function FraudDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    let active = true;
-    
+  const fetchData = () => {
+    setLoading(true);
+    setError('');
     Promise.all([getFraudSummary(), getRecentFraudPredictions()])
       .then(([summaryData, recentData]) => {
-        if (!active) return;
         setSummary(summaryData);
         setTransactions(recentData);
         setLoading(false);
       })
-      .catch((err) => {
-        if (!active) return;
+      .catch(() => {
         setError('Failed to load fraud metrics. Backend may be unavailable.');
         setLoading(false);
       });
+  };
 
-    return () => {
-      active = false;
-    };
+  useEffect(() => {
+    fetchData();
   }, []);
 
-  if (loading) return <LoadingSpinner label="Loading fraud metrics…" />;
+  if (loading && !summary) return <LoadingSpinner label="Loading fraud metrics…" />;
   
-  if (error) return <div style={{ color: 'var(--color-danger)', padding: 20 }}>{error}</div>;
+  if (error && !summary) return <div style={{ color: 'var(--color-danger)', padding: 20 }}>{error}</div>;
 
   return (
     <div>
-      <h1>Fraud Monitoring</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1>Fraud Monitoring</h1>
+        <button onClick={fetchData} className="btn btn-outline" disabled={loading}>
+          {loading ? 'Refreshing...' : 'Refresh'}
+        </button>
+      </div>
 
       <div className="metric-grid">
         <div className="card card-padded metric-card">
@@ -79,20 +82,30 @@ function FraudDashboard() {
               <th>Risk Level</th>
               <th>Fraud Score</th>
               <th>Decision</th>
+              <th>Model Used</th>
               <th>Timestamp</th>
             </tr>
           </thead>
           <tbody>
-            {transactions.map((t) => (
-              <tr key={t.id}>
-                <td>{t.transactionId}</td>
-                <td>{formatCurrency(t.amount || 0)}</td>
-                <td><RiskBadge riskLevel={t.riskLevel} /></td>
-                <td>{t.fraudScore}</td>
-                <td><span className={`badge ${DECISION_CLASS[t.decision] || 'badge-neutral'}`}>{t.decision}</span></td>
-                <td>{formatDateTime(t.created_at || t.timestamp)}</td>
+            {transactions.length === 0 ? (
+              <tr>
+                <td colSpan="7" style={{ textAlign: 'center', padding: '32px', color: 'var(--color-text-faint)' }}>
+                  No recent predictions available.
+                </td>
               </tr>
-            ))}
+            ) : (
+              transactions.map((t) => (
+                <tr key={t.id || t.transactionId}>
+                  <td>{t.transactionId}</td>
+                  <td>{formatCurrency(t.amount || 0)}</td>
+                  <td><RiskBadge riskLevel={t.riskLevel} /></td>
+                  <td>{t.fraudScore}</td>
+                  <td><span className={`badge ${DECISION_CLASS[t.decision] || 'badge-neutral'}`}>{t.decision}</span></td>
+                  <td>{t.model_used || 'Unknown'}</td>
+                  <td>{formatDateTime(t.created_at || t.timestamp)}</td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>

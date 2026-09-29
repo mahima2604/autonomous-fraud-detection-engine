@@ -165,8 +165,22 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db)):
 
 @app.get("/api/admin/fraud/recent")
 def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db)):
-    preds = db.query(FraudPrediction).order_by(FraudPrediction.created_at.desc()).limit(limit).all()
-    return preds
+    from sqlalchemy.orm import joinedload
+    preds = db.query(FraudPrediction).options(joinedload(FraudPrediction.transaction)).order_by(FraudPrediction.created_at.desc()).limit(limit).all()
+    
+    results = []
+    for pred in preds:
+        results.append({
+            "id": pred.id,
+            "transaction_id": pred.transaction_id,
+            "fraud_probability": pred.fraud_probability,
+            "risk_level": pred.risk_level,
+            "decision": pred.decision,
+            "model_used": pred.model_used,
+            "created_at": pred.created_at,
+            "amount": pred.transaction.amount if pred.transaction else 0.0
+        })
+    return results
 
 @app.get("/api/admin/fraud/summary")
 def get_fraud_summary(db: Session = Depends(get_db)):

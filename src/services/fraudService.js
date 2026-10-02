@@ -11,6 +11,14 @@ import { apiRequest, USE_MOCKS, mockDelay } from './api';
 import { generateMockFraudResponse } from './mock/mockFraud';
 
 export async function analyzeTransaction(transactionPayload) {
+  if (
+    transactionPayload.TransactionAmt === undefined ||
+    transactionPayload.TransactionAmt === null ||
+    Number.isNaN(transactionPayload.TransactionAmt)
+  ) {
+    throw new Error('Invalid transaction amount. Please check your cart.');
+  }
+  
   if (USE_MOCKS) {
     await mockDelay(1200); // simulate model inference latency
     return generateMockFraudResponse(transactionPayload);
@@ -19,7 +27,7 @@ export async function analyzeTransaction(transactionPayload) {
   // Map snake_case from backend to camelCase for frontend
   return {
     ...response,
-    transactionId: transactionPayload.TransactionID,
+    transactionId: response.transaction_id,
     riskLevel: response.risk_level,
     fraudScore: response.fraud_probability,
     isMock: false

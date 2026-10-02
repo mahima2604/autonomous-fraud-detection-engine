@@ -96,14 +96,14 @@ def evaluate_gnn(model, data):
     print(f"  VALIDATION Confusion Matrix:\n[[{tn} {fp}]\n [{fn} {tp}]]\n")
     return precision, recall, f1, roc_auc
 
-def save_artifacts(model, baseline_model, scalers, encoders, output_dir="models"):
+def save_artifacts(model, baseline_pipeline, scalers, encoders, output_dir="models"):
     print(f"Saving models and artifacts to {output_dir}/")
     os.makedirs(output_dir, exist_ok=True)
     
     if model is not None:
         torch.save(model.state_dict(), os.path.join(output_dir, "graphsage.pth"))
-    if baseline_model is not None:
-        joblib.dump(baseline_model, os.path.join(output_dir, "logistic_regression.pkl"))
+    if baseline_pipeline is not None:
+        joblib.dump(baseline_pipeline, os.path.join(output_dir, "baseline_pipeline.pkl"))
     if scalers is not None:
         joblib.dump(scalers, os.path.join(output_dir, "scalers.pkl"))
     if encoders is not None:
@@ -145,17 +145,22 @@ if __name__ == "__main__":
     
     # 5. Baseline Model
     features_for_baseline = NUMERICAL_COLS + CATEGORICAL_COLS
-    X_train = df_train_proc[features_for_baseline].values
-    y_train = df_train_proc['isFraud'].values
     
-    X_val = df_val_proc[features_for_baseline].values
-    y_val = df_val_proc['isFraud'].values
+    # Restrict baseline to features available during checkout to avoid missing-value bias
+    BASELINE_NUMERICAL_COLS = ['TransactionAmt']
+    BASELINE_CATEGORICAL_COLS = ['ProductCD', 'P_emaildomain', 'DeviceType', 'DeviceInfo']
     
-    clf = train_baseline_logistic_regression(X_train, y_train)
-    evaluate_baseline(clf, X_val, y_val)
+    # Train the pipeline on the RAW sampled training data, not the GNN-processed data
+    y_train_raw = df_train_sampled['isFraud'].values
+    y_val_raw = df_val['isFraud'].values
+    
+    baseline_pipeline = train_baseline_logistic_regression(
+        df_train_sampled, y_train_raw, BASELINE_NUMERICAL_COLS, BASELINE_CATEGORICAL_COLS
+    )
+    evaluate_baseline(baseline_pipeline, df_val, y_val_raw, BASELINE_NUMERICAL_COLS, BASELINE_CATEGORICAL_COLS)
     
     # Save artifacts before graph construction in case of memory errors
-    save_artifacts(None, clf, scalers, encoders, output_dir="models")
+    save_artifacts(None, baseline_pipeline, scalers, encoders, output_dir="models")
     
     # 6. Graph Construction (Train)
     train_data = build_homogeneous_transaction_graph(df_train_proc, features_for_baseline, EDGE_COLS)
@@ -169,5 +174,5 @@ if __name__ == "__main__":
     evaluate_gnn(gnn_model, val_data)
     
     # 9. Save artifacts
-    save_artifacts(gnn_model, clf, scalers, encoders, output_dir="models")
+    save_artifacts(gnn_model, baseline_pipeline, scalers, encoders, output_dir="models")
 

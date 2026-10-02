@@ -59,7 +59,7 @@ export async function apiRequest(path, options = {}) {
   }
 
   if (!response.ok) {
-    const message = (data && data.message) || `Request failed with status ${response.status}`;
+    const message = (data && data.detail) || (data && data.message) || `Request failed with status ${response.status}`;
     throw new ApiError(message, response.status, data);
   }
 

@@ -7,7 +7,7 @@ import os
 import sys
 from sqlalchemy.orm import Session
 
-# Ensure backend directory is in sys.path if not running module properly
+# Ensure backend directory is in sys.path if not running module properly 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.ml.preprocessing import select_features_and_preprocess
@@ -44,7 +44,7 @@ CATEGORICAL_COLS = ['ProductCD', 'card1', 'card2', 'card3', 'card4', 'card5', 'c
 try:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     MODELS_DIR = os.path.join(BASE_DIR, "models")
-    clf_model = joblib.load(os.path.join(MODELS_DIR, "logistic_regression.pkl"))
+    baseline_pipeline = joblib.load(os.path.join(MODELS_DIR, "baseline_pipeline.pkl"))
     scalers = joblib.load(os.path.join(MODELS_DIR, "scalers.pkl"))
     encoders = joblib.load(os.path.join(MODELS_DIR, "encoders.pkl"))
     artifacts_loaded = True
@@ -53,7 +53,6 @@ except Exception as e:
     artifacts_loaded = False
 
 class TransactionInput(BaseModel):
-    TransactionID: int
     TransactionAmt: float
     dist1: Optional[float] = None
     dist2: Optional[float] = None
@@ -86,6 +85,7 @@ class TransactionInput(BaseModel):
     DeviceInfo: Optional[str] = None
 
 class PredictionResponse(BaseModel):
+    transaction_id: int
     fraud_probability: float
     risk_level: str
     decision: str
@@ -102,7 +102,8 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db)):
         
     try:
         # Convert to DataFrame
-        df = pd.DataFrame([transaction.dict()])
+        transaction_data = transaction.dict(exclude={"TransactionID"})
+        df = pd.DataFrame([transaction_data])
         
         # Preprocess
         df_proc, _, _ = select_features_and_preprocess(
@@ -114,12 +115,8 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db)):
             encoders=encoders
         )
         
-        # Predict using Logistic Regression Baseline
-        features = NUMERICAL_COLS + CATEGORICAL_COLS
-        X = df_proc[features].values
-        
-        # fraud probability is the probability of class 1
-        fraud_prob = float(clf_model.predict_proba(X)[0, 1])
+        # Predict using Logistic Regression Baseline (Pipeline handles preprocessing internally)
+        fraud_prob = float(baseline_pipeline.predict_proba(df)[0, 1])
         
         # Determine risk level and decision
         if fraud_prob <= 0.30:
@@ -133,18 +130,15 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db)):
             decision = "BLOCK"
             
         # Store in database
-        db_tx = db.query(Transaction).filter(Transaction.id == transaction.TransactionID).first()
-        if not db_tx:
-            db_tx = Transaction(
-                id=transaction.TransactionID,
-                amount=transaction.TransactionAmt,
-                transaction_data=transaction.dict()
-            )
-            db.add(db_tx)
-            db.commit()
+        db_tx = Transaction(
+            amount=transaction.TransactionAmt,
+            transaction_data=transaction_data
+        )
+        db.add(db_tx)
+        db.flush()
             
         db_pred = FraudPrediction(
-            transaction_id=transaction.TransactionID,
+            transaction_id=db_tx.id,
             fraud_probability=round(fraud_prob, 4),
             risk_level=risk_level,
             decision=decision,
@@ -154,6 +148,7 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db)):
         db.commit()
             
         return PredictionResponse(
+            transaction_id=db_tx.id,
             fraud_probability=round(fraud_prob, 4),
             risk_level=risk_level,
             decision=decision,
@@ -161,6 +156,7 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db)):
         )
         
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=400, detail=f"Prediction error: {str(e)}")
 
 @app.get("/api/admin/fraud/recent")

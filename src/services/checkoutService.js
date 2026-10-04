@@ -7,10 +7,12 @@
  * creation. Keeps a clear line between what the frontend can supply
  * and what only the backend can generate.
  */
-export function buildTransactionPayload({ user, cartItems, amount, paymentMethod, billingAddress, shippingAddress }) {
+export function buildTransactionPayload({ user, cartItems, amount, billingAddress, shippingAddress }) {
   return {
     TransactionAmt: amount,
-    ProductCD: paymentMethod === 'CARD' ? 'W' : 'C',
+    // Checkout has no defensible mapping to the IEEE-CIS ProductCD feature.
+    // The saved baseline pipeline imputes this missing value and ignores UNKNOWN.
+    ProductCD: null,
     
     // Extract domain from user if possible
     P_emaildomain: user?.email ? user.email.split('@')[1] : "gmail.com",
@@ -24,13 +26,25 @@ export function buildTransactionPayload({ user, cartItems, amount, paymentMethod
 const PENDING_KEY = 'pending_checkout';
 
 /** Persists the in-progress checkout state across Checkout → Fraud → Payment pages. */
+function createCheckoutAttemptId() {
+  return globalThis.crypto?.randomUUID?.() ?? `checkout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function savePendingCheckout(data) {
-  sessionStorage.setItem(PENDING_KEY, JSON.stringify(data));
+  const pending = { ...data, attemptId: data.attemptId || createCheckoutAttemptId() };
+  sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
 }
 
 export function getPendingCheckout() {
   try {
-    return JSON.parse(sessionStorage.getItem(PENDING_KEY));
+    const pending = JSON.parse(sessionStorage.getItem(PENDING_KEY));
+    if (!pending) return null;
+
+    if (!pending.attemptId) {
+      pending.attemptId = createCheckoutAttemptId();
+      sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+    }
+    return pending;
   } catch {
     return null;
   }

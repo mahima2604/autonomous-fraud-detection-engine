@@ -10,7 +10,9 @@
 import { apiRequest, USE_MOCKS, mockDelay } from './api';
 import { generateMockFraudResponse } from './mock/mockFraud';
 
-export async function analyzeTransaction(transactionPayload) {
+const predictionRequests = new Map();
+
+export function analyzeTransaction(transactionPayload, attemptId) {
   if (
     transactionPayload.TransactionAmt === undefined ||
     transactionPayload.TransactionAmt === null ||
@@ -19,19 +21,34 @@ export async function analyzeTransaction(transactionPayload) {
     throw new Error('Invalid transaction amount. Please check your cart.');
   }
   
-  if (USE_MOCKS) {
-    await mockDelay(1200); // simulate model inference latency
-    return generateMockFraudResponse(transactionPayload);
+  if (attemptId && predictionRequests.has(attemptId)) {
+    return predictionRequests.get(attemptId);
   }
-  const response = await apiRequest('/fraud/predict', { method: 'POST', body: transactionPayload });
-  // Map snake_case from backend to camelCase for frontend
-  return {
-    ...response,
-    transactionId: response.transaction_id,
-    riskLevel: response.risk_level,
-    fraudScore: response.fraud_probability,
-    isMock: false
-  };
+
+  const request = (async () => {
+    if (USE_MOCKS) {
+      await mockDelay(1200); // simulate model inference latency
+      return generateMockFraudResponse(transactionPayload);
+    }
+    const response = await apiRequest('/fraud/predict', { method: 'POST', body: transactionPayload });
+    // Map snake_case from backend to camelCase for frontend
+    return {
+      ...response,
+      transactionId: response.transaction_id,
+      riskLevel: response.risk_level,
+      fraudScore: response.fraud_probability,
+      isMock: false
+    };
+  })();
+
+  if (attemptId) {
+    // The app keeps one pending checkout at a time. Retain its settled promise
+    // until a new checkout attempt supplies a different ID.
+    predictionRequests.clear();
+    predictionRequests.set(attemptId, request);
+  }
+
+  return request;
 }
 
 export async function getRecentFraudPredictions() {

@@ -24,9 +24,23 @@ function FraudVerification() {
   useEffect(() => {
     if (!pending) return;
     let active = true;
+
+    if (pending.fraudResult) {
+      setResult(pending.fraudResult);
+      setLoading(false);
+      return () => {
+        active = false;
+      };
+    }
+
     setLoading(true);
-    analyzeTransaction(pending.transaction)
-      .then((res) => active && setResult(res))
+    analyzeTransaction(pending.transaction, pending.attemptId)
+      .then((res) => {
+        if (active) {
+          savePendingCheckout({ ...pending, fraudResult: res });
+          setResult(res);
+        }
+      })
       .catch((err) => active && setError(err.message || 'Fraud check failed. Please try again.'))
       .finally(() => active && setLoading(false));
     return () => {

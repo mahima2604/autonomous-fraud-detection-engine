@@ -1,8 +1,5 @@
 // FraudDashboard.jsx
-// Admin-facing fraud monitoring overview. Uses mock summary/transaction
-// data (services/mock/mockDashboard.js) until the backend exposes real
-// fraud-monitoring endpoints. Displays metrics only — no ML prediction
-// logic lives here.
+// Admin-facing fraud monitoring overview backed by the fraud API.
 import { useEffect, useState } from 'react';
 import { getRecentFraudPredictions, getFraudSummary } from '../../services/fraudService';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
@@ -70,10 +67,10 @@ function FraudDashboard() {
       </div>
 
       <div className="section-heading" style={{ marginTop: 32 }}>
-        <h2>Recent suspicious transactions</h2>
+        <h2 id="fraud-predictions">Fraud predictions</h2>
       </div>
 
-      <div className="card table-scroll">
+      <div id="transactions" className="card table-scroll">
         <table className="data-table">
           <thead>
             <tr>
@@ -109,6 +106,14 @@ function FraudDashboard() {
           </tbody>
         </table>
       </div>
+
+      <section id="customers" className="card card-padded" style={{ marginTop: 24 }}>
+        <h2>Customer information</h2>
+        <p>
+          Customer accounts use local demo authentication and are not linked to backend transactions.
+          No persisted customer details are available in this dashboard.
+        </p>
+      </section>
     </div>
   );
 }

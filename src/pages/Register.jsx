@@ -31,7 +31,7 @@ function Register() {
     setLoading(true);
     try {
       await register(form);
-      navigate('/', { replace: true });
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       setSubmitError(err.message || 'Registration failed. Please try again.');
     } finally {

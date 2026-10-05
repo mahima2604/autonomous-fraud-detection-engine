@@ -3,13 +3,15 @@
 // the customer storefront so it reads as an internal tool.
 
 import { Outlet, Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 function AdminLayout() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
 
   const handleLogout = () => {
-    localStorage.removeItem('admin_authenticated');
-    navigate('/admin/login');
+    logout();
+    navigate('/login', { replace: true });
   };
 
   return (
@@ -18,9 +20,12 @@ function AdminLayout() {
         <div className="container" style={{ height: 60, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontWeight: 800, letterSpacing: '-0.02em' }}>SecureCart Admin</span>
           <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-            <Link to="/" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>
-              ← Back to storefront
+            <Link to="/admin/dashboard" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>
+              Dashboard
             </Link>
+            <a href="#fraud-predictions" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>Fraud predictions</a>
+            <a href="#customers" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>Customers</a>
+            <a href="#transactions" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>Transactions</a>
             <button 
               onClick={handleLogout} 
               style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.3)', color: '#fff', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: 12 }}

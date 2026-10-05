@@ -5,13 +5,13 @@ import { useCart } from '../../context/CartContext';
 import './Navbar.css';
 
 function Navbar() {
-  const { user, isAuthenticated, logout } = useAuth();
+  const { user, role, isAuthenticated, logout } = useAuth();
   const { itemCount } = useCart();
   const navigate = useNavigate();
 
   function handleLogout() {
     logout();
-    navigate('/');
+    navigate('/login');
   }
 
   return (
@@ -22,10 +22,15 @@ function Navbar() {
         </Link>
 
         <nav className="navbar-links">
+          {role === 'user' && (
+            <NavLink to="/dashboard" className={({ isActive }) => (isActive ? 'active' : '')}>
+              Dashboard
+            </NavLink>
+          )}
           <NavLink to="/products" className={({ isActive }) => (isActive ? 'active' : '')}>
             Products
           </NavLink>
-          {isAuthenticated && (
+          {role === 'user' && (
             <NavLink to="/orders" className={({ isActive }) => (isActive ? 'active' : '')}>
               Orders
             </NavLink>

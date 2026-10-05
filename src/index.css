@@ -197,6 +197,11 @@ textarea {
   padding: 24px;
 }
 
+.dashboard-link-card {
+  color: inherit;
+  text-decoration: none;
+}
+
 /* ---------- Forms ---------- */
 .field {
   margin-bottom: 18px;

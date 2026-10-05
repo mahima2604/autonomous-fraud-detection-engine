@@ -51,8 +51,8 @@ export function analyzeTransaction(transactionPayload, attemptId) {
   return request;
 }
 
-export async function getRecentFraudPredictions() {
-  const response = await apiRequest('/admin/fraud/recent');
+export async function getRecentFraudPredictions(limit = 10000) {
+  const response = await apiRequest(`/admin/fraud/recent?limit=${encodeURIComponent(limit)}`);
   return response.map(r => ({
     ...r,
     riskLevel: r.risk_level,

@@ -3,11 +3,11 @@
 // logic separate from App.jsx keeps App.jsx clean and makes it easy to
 // add/remove/reorganize pages as the project grows.
 
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 
 import MainLayout from '../layouts/MainLayout';
 import AdminLayout from '../layouts/AdminLayout';
-import ProtectedRoute from '../components/common/ProtectedRoute';
+import UserProtectedRoute from '../components/common/ProtectedRoute';
 
 import Home from '../pages/Home';
 import Login from '../pages/Login';
@@ -20,8 +20,8 @@ import FraudVerification from '../pages/FraudVerification';
 import Payment from '../pages/Payment';
 import OrderSuccess from '../pages/OrderSuccess';
 import Orders from '../pages/Orders';
+import UserDashboard from '../pages/Dashboard';
 import FraudDashboard from '../pages/admin/FraudDashboard';
-import AdminLogin from '../pages/admin/AdminLogin';
 import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
 
 function AppRoutes() {
@@ -35,20 +35,23 @@ function AppRoutes() {
         <Route path="products" element={<Products />} />
         <Route path="products/:id" element={<ProductDetails />} />
         <Route path="cart" element={<Cart />} />
+        <Route path="dashboard" element={<UserProtectedRoute><UserDashboard /></UserProtectedRoute>} />
 
         {/* Checkout → fraud verification → payment → success require a
             logged-in user, since orders need to be tied to an account. */}
-        <Route path="checkout" element={<ProtectedRoute><Checkout /></ProtectedRoute>} />
-        <Route path="fraud-verification" element={<ProtectedRoute><FraudVerification /></ProtectedRoute>} />
-        <Route path="payment" element={<ProtectedRoute><Payment /></ProtectedRoute>} />
-        <Route path="order-success" element={<ProtectedRoute><OrderSuccess /></ProtectedRoute>} />
-        <Route path="orders" element={<ProtectedRoute><Orders /></ProtectedRoute>} />
+        <Route path="checkout" element={<UserProtectedRoute><Checkout /></UserProtectedRoute>} />
+        <Route path="fraud-verification" element={<UserProtectedRoute><FraudVerification /></UserProtectedRoute>} />
+        <Route path="payment" element={<UserProtectedRoute><Payment /></UserProtectedRoute>} />
+        <Route path="order-success" element={<UserProtectedRoute><OrderSuccess /></UserProtectedRoute>} />
+        <Route path="orders" element={<UserProtectedRoute><Orders /></UserProtectedRoute>} />
       </Route>
 
       {/* Separate shell for the internal fraud-monitoring dashboard. */}
       <Route path="/admin" element={<AdminLayout />}>
-        <Route path="login" element={<AdminLogin />} />
-        <Route path="fraud-dashboard" element={
+        <Route index element={<Navigate to="/admin/dashboard" replace />} />
+        <Route path="login" element={<Navigate to="/login?role=admin" replace />} />
+        <Route path="fraud-dashboard" element={<Navigate to="/admin/dashboard" replace />} />
+        <Route path="dashboard" element={
           <AdminProtectedRoute>
             <FraudDashboard />
           </AdminProtectedRoute>

@@ -35,6 +35,7 @@ function Orders() {
   return (
     <div>
       <h1>Order History</h1>
+      <p className="mock-note">This demo order history uses sample data and is not linked to your account.</p>
       <div className="card">
         <table className="data-table">
           <thead>

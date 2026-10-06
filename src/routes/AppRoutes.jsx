@@ -22,6 +22,7 @@ import OrderSuccess from '../pages/OrderSuccess';
 import Orders from '../pages/Orders';
 import UserDashboard from '../pages/Dashboard';
 import FraudDashboard from '../pages/admin/FraudDashboard';
+import AdminCustomers from '../pages/admin/AdminCustomers';
 import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
 
 function AppRoutes() {
@@ -54,6 +55,11 @@ function AppRoutes() {
         <Route path="dashboard" element={
           <AdminProtectedRoute>
             <FraudDashboard />
+          </AdminProtectedRoute>
+        } />
+        <Route path="customers" element={
+          <AdminProtectedRoute>
+            <AdminCustomers />
           </AdminProtectedRoute>
         } />
       </Route>

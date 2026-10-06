@@ -313,3 +313,67 @@ def get_fraud_summary(db: Session = Depends(get_db), current_admin: Admin = Depe
             "HIGH": high
         }
     }
+
+
+@app.get("/api/admin/customers")
+def get_admin_customers(db: Session = Depends(get_db), current_admin: Admin = Depends(get_current_admin)):
+    customers = db.query(User).order_by(User.created_at.desc(), User.id.desc()).all()
+    return [
+        {
+            "id": customer.id,
+            "name": customer.name,
+            "email": customer.email,
+            "is_active": customer.is_active,
+            "created_at": customer.created_at,
+        }
+        for customer in customers
+    ]
+
+
+@app.get("/api/admin/customers/{customer_id}")
+def get_admin_customer_details(
+    customer_id: int,
+    db: Session = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+):
+    from fastapi import HTTPException
+
+    customer = db.query(User).filter(User.id == customer_id).first()
+    if customer is None:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    transactions = (
+        db.query(Transaction)
+        .filter(Transaction.user_id == customer.id)
+        .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+        .all()
+    )
+    return {
+        "customer": {
+            "id": customer.id,
+            "name": customer.name,
+            "email": customer.email,
+            "is_active": customer.is_active,
+            "created_at": customer.created_at,
+        },
+        "transactions": [
+            {
+                "transaction_id": transaction.id,
+                "amount": transaction.amount,
+                "status": transaction.status,
+                "created_at": transaction.created_at,
+                "fraud_prediction": (
+                    {
+                        "fraud_probability": transaction.prediction.fraud_probability,
+                        "risk_level": transaction.prediction.risk_level,
+                        "decision": transaction.prediction.decision,
+                        "model_used": transaction.prediction.model_used,
+                        "created_at": transaction.prediction.created_at,
+                    }
+                    if transaction.prediction
+                    else None
+                ),
+            }
+            for transaction in transactions
+        ],
+    }

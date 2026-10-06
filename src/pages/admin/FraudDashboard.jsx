@@ -107,13 +107,6 @@ function FraudDashboard() {
         </table>
       </div>
 
-      <section id="customers" className="card card-padded" style={{ marginTop: 24 }}>
-        <h2>Customer information</h2>
-        <p>
-          Customer accounts use local demo authentication and are not linked to backend transactions.
-          No persisted customer details are available in this dashboard.
-        </p>
-      </section>
     </div>
   );
 }

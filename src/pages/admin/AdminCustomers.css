@@ -1,0 +1,23 @@
+.admin-customers { display: grid; gap: 24px; }
+.admin-customers-heading, .admin-customer-toolbar, .admin-details-heading, .admin-transaction-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.admin-eyebrow { margin: 0 0 4px; color: var(--color-text-faint); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.admin-customer-list { overflow: hidden; }
+.admin-customer-toolbar { padding: 22px 24px; }
+.admin-customer-toolbar h2, .admin-details-heading h2 { margin: 0; font-size: 19px; }
+.admin-customer-toolbar p { margin: 4px 0 0; font-size: 13px; }
+.admin-search input { width: min(280px, 42vw); padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+.admin-state { padding: 32px 20px; margin: 0; text-align: center; color: var(--color-text-muted); }
+.admin-state-error p { color: var(--color-danger); }
+.admin-state-error { display: flex; justify-content: center; align-items: center; gap: 12px; }
+.admin-customer-details { display: grid; gap: 16px; }
+.admin-details-heading h2 { font-size: 22px; }
+.admin-customer-profile { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 20px; }
+.admin-customer-profile div { display: grid; gap: 5px; min-width: 0; }
+.admin-customer-profile span { color: var(--color-text-faint); font-size: 12px; text-transform: uppercase; font-weight: 700; }
+.admin-customer-profile strong { overflow-wrap: anywhere; font-size: 14px; }
+.admin-transaction-heading h3 { margin: 0; }
+.admin-table-empty { padding: 32px !important; text-align: center !important; color: var(--color-text-muted); }
+.admin-prediction-missing { white-space: normal !important; color: var(--color-text-muted); }
+.admin-transaction-date { display: block; margin-top: 4px; font-size: 12px; color: var(--color-text-faint); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 640px) { .admin-customer-toolbar { align-items: flex-start; flex-direction: column; } .admin-search, .admin-search input { width: 100%; } .admin-customers-heading { align-items: flex-start; } }

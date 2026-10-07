@@ -25,7 +25,7 @@ function AdminLayout() {
             </Link>
             <Link to="/admin/dashboard#fraud-predictions" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>Fraud predictions</Link>
             <Link to="/admin/customers" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>Customers</Link>
-            <Link to="/admin/dashboard#transactions" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>Transactions</Link>
+            <Link to="/admin/transactions" style={{ color: '#fff', fontSize: 13.5, textDecoration: 'none', opacity: 0.85 }}>Transactions</Link>
             <button 
               onClick={handleLogout} 
               style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.3)', color: '#fff', padding: '4px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: 12 }}

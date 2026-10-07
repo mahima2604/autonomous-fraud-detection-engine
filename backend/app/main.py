@@ -6,7 +6,7 @@ import pandas as pd
 import os
 import sys
 from sqlalchemy.orm import Session
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, func
 
 # Ensure backend directory is in sys.path if not running module properly 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -313,6 +313,68 @@ def get_fraud_summary(db: Session = Depends(get_db), current_admin: Admin = Depe
             "HIGH": high
         }
     }
+
+
+@app.get("/api/admin/transactions")
+def get_admin_transactions(db: Session = Depends(get_db), current_admin: Admin = Depends(get_current_admin)):
+    from sqlalchemy.orm import aliased
+
+    # Rank predictions explicitly because the database permits multiple rows
+    # per transaction while the ORM relationship is configured as one-to-one.
+    ranked_predictions = (
+        db.query(
+            FraudPrediction.id.label("id"),
+            FraudPrediction.transaction_id.label("transaction_id"),
+            FraudPrediction.fraud_probability.label("fraud_probability"),
+            FraudPrediction.risk_level.label("risk_level"),
+            FraudPrediction.decision.label("decision"),
+            FraudPrediction.model_used.label("model_used"),
+            FraudPrediction.created_at.label("created_at"),
+            func.row_number().over(
+                partition_by=FraudPrediction.transaction_id,
+                order_by=(FraudPrediction.created_at.desc(), FraudPrediction.id.desc()),
+            ).label("row_number"),
+        )
+        .subquery()
+    )
+
+    LatestPrediction = aliased(FraudPrediction, ranked_predictions)
+    rows = (
+        db.query(Transaction, User, LatestPrediction)
+        .outerjoin(User, Transaction.user_id == User.id)
+        .outerjoin(
+            ranked_predictions,
+            (LatestPrediction.transaction_id == Transaction.id)
+            & (ranked_predictions.c.row_number == 1),
+        )
+        .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+        .all()
+    )
+
+    return [
+        {
+            "transaction_id": transaction.id,
+            "amount": transaction.amount,
+            "currency": transaction.currency,
+            "status": transaction.status,
+            "created_at": transaction.created_at,
+            "customer": (
+                {"user_id": customer.id, "name": customer.name, "email": customer.email}
+                if customer is not None else None
+            ),
+            "fraud_prediction": (
+                {
+                    "fraud_probability": prediction.fraud_probability,
+                    "risk_level": prediction.risk_level,
+                    "decision": prediction.decision,
+                    "model_used": prediction.model_used,
+                    "prediction_created_at": prediction.created_at,
+                }
+                if prediction.id is not None else None
+            ),
+        }
+        for transaction, customer, prediction in rows
+    ]
 
 
 @app.get("/api/admin/customers")

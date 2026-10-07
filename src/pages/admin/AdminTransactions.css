@@ -1,0 +1,14 @@
+.admin-transactions { display: grid; gap: 24px; }
+.admin-transactions-heading, .admin-transactions-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.admin-transactions-card { overflow: hidden; }
+.admin-transactions-toolbar { padding: 22px 24px; }
+.admin-transactions-toolbar h2 { margin: 0; font-size: 19px; }
+.admin-transactions-toolbar p { margin: 4px 0 0; font-size: 13px; }
+.admin-transaction-controls { display: flex; gap: 10px; }
+.admin-transaction-search input, .admin-risk-filter select { min-height: 39px; padding: 9px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #fff; }
+.admin-transaction-search input { width: min(280px, 38vw); }
+.admin-transactions-state { padding: 32px 20px; margin: 0; text-align: center; color: var(--color-text-muted); }
+.admin-transactions-error { display: flex; justify-content: center; align-items: center; gap: 12px; }
+.admin-transactions-error p { color: var(--color-danger); }
+@media (max-width: 760px) { .admin-transactions-toolbar { align-items: flex-start; flex-direction: column; } .admin-transaction-controls { width: 100%; } .admin-transaction-search, .admin-transaction-search input { width: 100%; } }
+@media (max-width: 640px) { .admin-transactions-heading { align-items: flex-start; } .admin-transaction-controls { flex-direction: column; } .admin-risk-filter select { width: 100%; } }

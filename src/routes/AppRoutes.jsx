@@ -23,6 +23,7 @@ import Orders from '../pages/Orders';
 import UserDashboard from '../pages/Dashboard';
 import FraudDashboard from '../pages/admin/FraudDashboard';
 import AdminCustomers from '../pages/admin/AdminCustomers';
+import AdminTransactions from '../pages/admin/AdminTransactions';
 import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
 
 function AppRoutes() {
@@ -60,6 +61,11 @@ function AppRoutes() {
         <Route path="customers" element={
           <AdminProtectedRoute>
             <AdminCustomers />
+          </AdminProtectedRoute>
+        } />
+        <Route path="transactions" element={
+          <AdminProtectedRoute>
+            <AdminTransactions />
           </AdminProtectedRoute>
         } />
       </Route>

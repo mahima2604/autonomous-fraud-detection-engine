@@ -281,11 +281,36 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
 
 @app.get("/api/admin/fraud/recent")
 def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), current_admin: Admin = Depends(get_current_admin)):
-    from sqlalchemy.orm import joinedload
-    preds = db.query(FraudPrediction).options(joinedload(FraudPrediction.transaction)).order_by(FraudPrediction.created_at.desc()).limit(limit).all()
+    from sqlalchemy.orm import aliased
+
+    ranked_predictions = (
+        db.query(
+            FraudPrediction.id.label("id"),
+            FraudPrediction.transaction_id.label("transaction_id"),
+            FraudPrediction.fraud_probability.label("fraud_probability"),
+            FraudPrediction.risk_level.label("risk_level"),
+            FraudPrediction.decision.label("decision"),
+            FraudPrediction.model_used.label("model_used"),
+            FraudPrediction.created_at.label("created_at"),
+            func.row_number().over(
+                partition_by=FraudPrediction.transaction_id,
+                order_by=(FraudPrediction.created_at.desc(), FraudPrediction.id.desc()),
+            ).label("row_number"),
+        )
+        .subquery()
+    )
+    LatestPrediction = aliased(FraudPrediction, ranked_predictions)
+    rows = (
+        db.query(LatestPrediction, Transaction)
+        .join(Transaction, LatestPrediction.transaction_id == Transaction.id)
+        .filter(ranked_predictions.c.row_number == 1)
+        .order_by(LatestPrediction.created_at.desc(), LatestPrediction.id.desc())
+        .limit(limit)
+        .all()
+    )
     
     results = []
-    for pred in preds:
+    for pred, transaction in rows:
         results.append({
             "id": pred.id,
             "transaction_id": pred.transaction_id,
@@ -294,7 +319,7 @@ def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), curre
             "decision": pred.decision,
             "model_used": pred.model_used,
             "created_at": pred.created_at,
-            "amount": pred.transaction.amount if pred.transaction else 0.0
+            "amount": transaction.amount
         })
     return results
 
@@ -404,8 +429,32 @@ def get_admin_customer_details(
     if customer is None:
         raise HTTPException(status_code=404, detail="Customer not found")
 
+    from sqlalchemy.orm import aliased
+
+    ranked_predictions = (
+        db.query(
+            FraudPrediction.id.label("id"),
+            FraudPrediction.transaction_id.label("transaction_id"),
+            FraudPrediction.fraud_probability.label("fraud_probability"),
+            FraudPrediction.risk_level.label("risk_level"),
+            FraudPrediction.decision.label("decision"),
+            FraudPrediction.model_used.label("model_used"),
+            FraudPrediction.created_at.label("created_at"),
+            func.row_number().over(
+                partition_by=FraudPrediction.transaction_id,
+                order_by=(FraudPrediction.created_at.desc(), FraudPrediction.id.desc()),
+            ).label("row_number"),
+        )
+        .subquery()
+    )
+    LatestPrediction = aliased(FraudPrediction, ranked_predictions)
     transactions = (
-        db.query(Transaction)
+        db.query(Transaction, LatestPrediction)
+        .outerjoin(
+            ranked_predictions,
+            (LatestPrediction.transaction_id == Transaction.id)
+            & (ranked_predictions.c.row_number == 1),
+        )
         .filter(Transaction.user_id == customer.id)
         .order_by(Transaction.created_at.desc(), Transaction.id.desc())
         .all()
@@ -426,16 +475,16 @@ def get_admin_customer_details(
                 "created_at": transaction.created_at,
                 "fraud_prediction": (
                     {
-                        "fraud_probability": transaction.prediction.fraud_probability,
-                        "risk_level": transaction.prediction.risk_level,
-                        "decision": transaction.prediction.decision,
-                        "model_used": transaction.prediction.model_used,
-                        "created_at": transaction.prediction.created_at,
+                        "fraud_probability": prediction.fraud_probability,
+                        "risk_level": prediction.risk_level,
+                        "decision": prediction.decision,
+                        "model_used": prediction.model_used,
+                        "created_at": prediction.created_at,
                     }
-                    if transaction.prediction
+                    if prediction is not None and prediction.id is not None
                     else None
                 ),
             }
-            for transaction in transactions
+            for transaction, prediction in transactions
         ],
     }

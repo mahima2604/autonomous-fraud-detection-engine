@@ -325,17 +325,32 @@ def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), curre
 
 @app.get("/api/admin/fraud/summary")
 def get_fraud_summary(db: Session = Depends(get_db), current_admin: Admin = Depends(get_current_admin)):
-    total = db.query(FraudPrediction).count()
-    low = db.query(FraudPrediction).filter(FraudPrediction.risk_level == 'LOW').count()
-    medium = db.query(FraudPrediction).filter(FraudPrediction.risk_level == 'MEDIUM').count()
-    high = db.query(FraudPrediction).filter(FraudPrediction.risk_level == 'HIGH').count()
+    ranked_predictions = (
+        db.query(
+            FraudPrediction.id.label("id"),
+            FraudPrediction.transaction_id.label("transaction_id"),
+            FraudPrediction.risk_level.label("risk_level"),
+            func.row_number().over(
+                partition_by=FraudPrediction.transaction_id,
+                order_by=(FraudPrediction.created_at.desc(), FraudPrediction.id.desc()),
+            ).label("row_number"),
+        )
+        .subquery()
+    )
+    latest_predictions = db.query(ranked_predictions).filter(ranked_predictions.c.row_number == 1).subquery()
+    counts = dict(
+        db.query(latest_predictions.c.risk_level, func.count(latest_predictions.c.id))
+        .group_by(latest_predictions.c.risk_level)
+        .all()
+    )
+    total = sum(counts.values())
     
     return {
         "total_predictions": total,
         "risk_breakdown": {
-            "LOW": low,
-            "MEDIUM": medium,
-            "HIGH": high
+            "LOW": counts.get("LOW", 0),
+            "MEDIUM": counts.get("MEDIUM", 0),
+            "HIGH": counts.get("HIGH", 0)
         }
     }
 

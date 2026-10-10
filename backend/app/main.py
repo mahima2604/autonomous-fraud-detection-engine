@@ -301,8 +301,9 @@ def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), curre
     )
     LatestPrediction = aliased(FraudPrediction, ranked_predictions)
     rows = (
-        db.query(LatestPrediction, Transaction)
+        db.query(LatestPrediction, Transaction, User)
         .join(Transaction, LatestPrediction.transaction_id == Transaction.id)
+        .outerjoin(User, Transaction.user_id == User.id)
         .filter(ranked_predictions.c.row_number == 1)
         .order_by(LatestPrediction.created_at.desc(), LatestPrediction.id.desc())
         .limit(limit)
@@ -310,7 +311,7 @@ def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), curre
     )
     
     results = []
-    for pred, transaction in rows:
+    for pred, transaction, customer in rows:
         results.append({
             "id": pred.id,
             "transaction_id": pred.transaction_id,
@@ -319,7 +320,9 @@ def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), curre
             "decision": pred.decision,
             "model_used": pred.model_used,
             "created_at": pred.created_at,
-            "amount": transaction.amount
+            "amount": transaction.amount,
+            "customer_name": customer.name if customer is not None else None,
+            "customer_email": customer.email if customer is not None else None,
         })
     return results
 

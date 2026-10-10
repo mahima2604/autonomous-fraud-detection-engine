@@ -75,6 +75,7 @@ function FraudDashboard() {
           <thead>
             <tr>
               <th>Transaction ID</th>
+              <th>Customer</th>
               <th>Amount</th>
               <th>Risk Level</th>
               <th>Fraud Score</th>
@@ -86,7 +87,7 @@ function FraudDashboard() {
           <tbody>
             {transactions.length === 0 ? (
               <tr>
-                <td colSpan="7" style={{ textAlign: 'center', padding: '32px', color: 'var(--color-text-faint)' }}>
+                <td colSpan="8" style={{ textAlign: 'center', padding: '32px', color: 'var(--color-text-faint)' }}>
                   No recent predictions available.
                 </td>
               </tr>
@@ -94,6 +95,16 @@ function FraudDashboard() {
               transactions.map((t) => (
                 <tr key={t.id || t.transactionId}>
                   <td>{t.transactionId}</td>
+                  <td>
+                    {t.customer_name || t.customer_email ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 150 }}>
+                        <span>{t.customer_name || 'Name unavailable'}</span>
+                        <span style={{ color: 'var(--color-text-faint)', fontSize: 12, overflowWrap: 'anywhere' }}>
+                          {t.customer_email || 'Email unavailable'}
+                        </span>
+                      </div>
+                    ) : 'Unassigned'}
+                  </td>
                   <td>{formatCurrency(t.amount || 0)}</td>
                   <td><RiskBadge riskLevel={t.riskLevel} /></td>
                   <td>{t.fraudScore}</td>

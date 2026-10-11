@@ -112,17 +112,13 @@ function Login() {
           </button>
         </form>
 
-        {selectedRole === 'user' ? (
+        {selectedRole === 'user' && (
           <>
             <p style={{ marginTop: 16, fontSize: 13.5 }}>
               Donâ€™t have an account? <Link to="/register">Sign up</Link>
             </p>
             <p className="mock-note">Customer authentication uses your SecureCart account.</p>
           </>
-        ) : (
-          <p className="mock-note admin-demo-credentials">
-            Demo admin: <code>admin@securecart.com</code> / <code>Admin@123</code>
-          </p>
         )}
       </div>
     </div>

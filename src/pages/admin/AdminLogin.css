@@ -49,21 +49,3 @@
   font-size: 14px;
   text-align: center;
 }
-
-.admin-demo-note {
-  margin-top: 24px;
-  padding: 16px;
-  background: #f5f7fa;
-  border: 1px solid #e1e4e8;
-  border-radius: 4px;
-  font-size: 13px;
-  color: var(--color-text-faint);
-  line-height: 1.5;
-}
-
-.admin-demo-note code {
-  background: #e1e4e8;
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: var(--color-text);
-}

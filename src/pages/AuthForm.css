@@ -62,10 +62,6 @@
   font-size: 13px;
 }
 
-.admin-demo-credentials {
-  margin-top: 16px;
-}
-
 @media (max-width: 520px) {
   .role-selector {
     grid-template-columns: 1fr;

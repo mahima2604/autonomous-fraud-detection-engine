@@ -29,24 +29,7 @@ if "name" not in {column["name"] for column in inspect(engine).get_columns("user
         connection.execute(text("ALTER TABLE users ADD COLUMN name VARCHAR"))
 
 
-def ensure_demo_admin():
-    email = os.getenv("ADMIN_EMAIL", "admin@securecart.com").strip().lower()
-    password = os.getenv("ADMIN_PASSWORD", "Admin@123")
-    db = SessionLocal()
-    try:
-        admin = db.query(Admin).filter(Admin.email == email).first()
-        if admin is None:
-            db.add(Admin(email=email, hashed_password=hash_password(password)))
-            db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-ensure_demo_admin()
-
+from app.admin_provisioning import bootstrap_demo_admin
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
@@ -63,6 +46,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def bootstrap_local_demo_admin():
+    bootstrap_demo_admin()
 
 # Constants for Features
 NUMERICAL_COLS = ['TransactionAmt', 'dist1', 'dist2', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'C11', 'C12', 'C13', 'C14']

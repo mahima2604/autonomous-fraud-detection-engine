@@ -1,12 +1,11 @@
 // FraudVerification.jsx
-// Sends the pending transaction to the fraud service and renders whatever
-// { riskLevel, decision, reasonCodes } it gets back. This page contains
-// no fraud-scoring logic of its own — see services/fraudService.js and
-// services/mock/mockFraud.js for the clearly-isolated mock stand-in.
+// Sends the pending transaction to the authenticated backend fraud service.
+// This page renders the returned assessment and contains no scoring logic.
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { getPendingCheckout, savePendingCheckout } from '../services/checkoutService';
-import { analyzeTransaction } from '../services/fraudService';
+import { analyzeTransaction, getTransactionStatus } from '../services/fraudService';
 import OrderSummary from '../components/checkout/OrderSummary';
 import FraudStatusCard from '../components/fraud/FraudStatusCard';
 import LoadingSpinner from '../components/common/LoadingSpinner';
@@ -14,38 +13,96 @@ import EmptyState from '../components/common/EmptyState';
 
 function FraudVerification() {
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const pending = getPendingCheckout();
 
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [confirming, setConfirming] = useState(false);
+  const [refreshingStatus, setRefreshingStatus] = useState(false);
+  const [statusError, setStatusError] = useState('');
+  const [statusNotice, setStatusNotice] = useState('');
+
+  async function refreshStatus(quiet = false, isActive = () => true) {
+    if (!pending?.fraudResult?.transactionId) {
+      if (!quiet && isActive()) setStatusError('Transaction reference is missing. Return to checkout to start again.');
+      return;
+    }
+
+    setRefreshingStatus(true);
+    setStatusError('');
+    setStatusNotice('');
+    try {
+      const current = await getTransactionStatus(pending.fraudResult.transactionId);
+      if (!isActive()) return;
+      const modelPrediction = current.fraud_prediction;
+      const modelDecision = modelPrediction?.decision || pending.fraudResult.modelDecision || pending.fraudResult.decision;
+      const isApprovedReview = current.status === 'REVIEW_APPROVED' && current.review_decision === 'APPROVE';
+      const isRejectedReview = current.status === 'REJECTED' && current.review_decision === 'REJECT';
+      const updatedResult = {
+        ...pending.fraudResult,
+        transactionId: current.transaction_id,
+        riskLevel: modelPrediction?.risk_level || pending.fraudResult.riskLevel,
+        fraudScore: modelPrediction?.fraud_probability ?? pending.fraudResult.fraudScore,
+        modelDecision,
+        decision: isApprovedReview ? 'APPROVE' : isRejectedReview ? 'REJECT' : modelDecision,
+        transactionStatus: current.status,
+        reviewDecision: current.review_decision,
+        reviewedAt: current.reviewed_at,
+        adminApproved: isApprovedReview,
+      };
+      savePendingCheckout({ ...pending, fraudResult: updatedResult });
+      setResult(updatedResult);
+      setStatusNotice(isApprovedReview
+        ? 'An administrator approved this transaction. Your saved checkout is ready to continue.'
+        : isRejectedReview
+          ? 'An administrator rejected this transaction. Payment is unavailable.'
+          : 'This transaction is still awaiting administrator review.');
+    } catch (statusRequestError) {
+      if (!isActive()) return;
+      setStatusError(statusRequestError.status === 401
+        ? 'Your sign-in session expired. Sign in again to check this transaction.'
+        : statusRequestError.status === 404
+          ? 'This transaction could not be found for your account.'
+          : 'Unable to refresh the review status right now. Your transaction remains blocked from payment until its status is confirmed.');
+    } finally {
+      if (isActive()) setRefreshingStatus(false);
+    }
+  }
+
+  function runFraudCheck(isActive = () => true) {
+    setLoading(true);
+    setError('');
+    analyzeTransaction(pending.transaction, pending.attemptId)
+      .then((res) => {
+        if (isActive()) {
+          savePendingCheckout({ ...pending, fraudResult: res });
+          setResult(res);
+          if (res.decision === 'REVIEW') refreshStatus(true, isActive);
+        }
+      })
+      .catch((err) => isActive() && setError(err.message || 'Fraud check failed. Please try again.'))
+      .finally(() => isActive() && setLoading(false));
+  }
 
   useEffect(() => {
     if (!pending) return;
     let active = true;
 
-    if (pending.fraudResult) {
+    if (pending.fraudResult && !pending.fraudResult.isMock) {
       setResult(pending.fraudResult);
       setLoading(false);
+      if (pending.fraudResult.decision === 'REVIEW') refreshStatus(true, () => active);
       return () => {
         active = false;
       };
     }
 
-    setLoading(true);
-    analyzeTransaction(pending.transaction, pending.attemptId)
-      .then((res) => {
-        if (active) {
-          savePendingCheckout({ ...pending, fraudResult: res });
-          setResult(res);
-        }
-      })
-      .catch((err) => active && setError(err.message || 'Fraud check failed. Please try again.'))
-      .finally(() => active && setLoading(false));
+    runFraudCheck(() => active);
     return () => {
       active = false;
     };
+    // Load once on mount; retry is handled by runFraudCheck.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -64,21 +121,15 @@ function FraudVerification() {
     navigate('/payment');
   }
 
-  function handleConfirmAndContinue() {
-    // Simulates the user completing an additional verification step for
-    // a REVIEW decision. A real implementation would call a dedicated
-    // backend verification endpoint here.
-    setConfirming(true);
-    setTimeout(() => {
-      savePendingCheckout({ ...pending, fraudResult: result });
-      navigate('/payment');
-    }, 600);
+  function handleSignInAgain() {
+    logout();
+    navigate('/login', { state: { from: { pathname: '/fraud-verification' } } });
   }
 
   return (
     <div className="fraud-verification-layout">
       <div>
-        <h1>Verifying your transaction</h1>
+        <h1>Fraud verification</h1>
         <p>We check every transaction for fraud risk before payment is processed.</p>
 
         {loading && <LoadingSpinner label="Running fraud risk check…" />}
@@ -87,7 +138,12 @@ function FraudVerification() {
           <EmptyState
             title="Verification failed"
             message={error}
-            action={<Link to="/checkout" className="btn btn-primary btn-sm">Back to checkout</Link>}
+            action={(
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <button className="btn btn-primary btn-sm" onClick={() => runFraudCheck()} disabled={loading}>Retry</button>
+                <Link to="/checkout" className="btn btn-secondary btn-sm">Back to checkout</Link>
+              </div>
+            )}
           />
         )}
 
@@ -103,16 +159,35 @@ function FraudVerification() {
               )}
 
               {result.decision === 'REVIEW' && (
-                <button className="btn btn-primary" onClick={handleConfirmAndContinue} disabled={confirming}>
-                  {confirming ? 'Confirming…' : 'Confirm details & continue'}
-                </button>
+                <div>
+                  <p className="form-error-banner" role="status">
+                    Payment is pending administrator review. You can refresh this page to check for a decision.
+                  </p>
+                  {statusNotice && <p role="status">{statusNotice}</p>}
+                  {statusError && <div className="form-error-banner" role="alert">
+                    <p>{statusError}</p>
+                    {statusError.includes('session expired') && <button className="btn btn-secondary btn-sm" onClick={handleSignInAgain}>Sign in again</button>}
+                  </div>}
+                  <button className="btn btn-secondary" onClick={() => refreshStatus()} disabled={refreshingStatus}>
+                    {refreshingStatus ? 'Checking status...' : 'Refresh review status'}
+                  </button>
+                </div>
+              )}
+
+              {result.decision === 'REJECT' && (
+                <div>
+                  <p className="form-error-banner" role="alert">This transaction was rejected after administrator review. Payment is unavailable.</p>
+                  <Link to="/cart" className="btn btn-secondary">Return to cart</Link>
+                </div>
               )}
 
               {result.decision === 'BLOCK' && (
                 <Link to="/cart" className="btn btn-secondary">Return to cart</Link>
               )}
 
-              <Link to="/checkout" className="btn btn-secondary">Edit checkout details</Link>
+              {result.decision !== 'REJECT' && result.decision !== 'BLOCK' && (
+                <Link to="/checkout" className="btn btn-secondary">Edit checkout details</Link>
+              )}
             </div>
           </>
         )}

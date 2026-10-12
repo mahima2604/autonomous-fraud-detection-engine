@@ -1,4 +1,14 @@
 .admin-transactions { display: grid; gap: 24px; }
+.admin-review-card { overflow: hidden; }
+.admin-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 24px; }
+.admin-review-heading h2 { margin: 0; font-size: 19px; }
+.admin-review-heading p { margin: 4px 0 0; font-size: 13px; }
+.admin-review-feedback { margin: 0 24px 12px; padding: 10px 12px; border-radius: var(--radius-sm); }
+.admin-review-feedback-success { color: var(--color-success); background: rgba(16, 185, 129, 0.1); }
+.admin-review-feedback-error { color: var(--color-danger); background: rgba(239, 68, 68, 0.1); }
+.admin-review-customer { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }
+.admin-review-customer small { color: var(--color-text-faint); overflow-wrap: anywhere; }
+.admin-review-actions { display: flex; gap: 8px; }
 .admin-transactions-heading, .admin-transactions-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .admin-transactions-card { overflow: hidden; }
 .admin-transactions-toolbar { padding: 22px 24px; }
@@ -10,5 +20,5 @@
 .admin-transactions-state { padding: 32px 20px; margin: 0; text-align: center; color: var(--color-text-muted); }
 .admin-transactions-error { display: flex; justify-content: center; align-items: center; gap: 12px; }
 .admin-transactions-error p { color: var(--color-danger); }
-@media (max-width: 760px) { .admin-transactions-toolbar { align-items: flex-start; flex-direction: column; } .admin-transaction-controls { width: 100%; } .admin-transaction-search, .admin-transaction-search input { width: 100%; } }
+@media (max-width: 760px) { .admin-review-heading, .admin-transactions-toolbar { align-items: flex-start; flex-direction: column; } .admin-transaction-controls { width: 100%; } .admin-transaction-search, .admin-transaction-search input { width: 100%; } }
 @media (max-width: 640px) { .admin-transactions-heading { align-items: flex-start; } .admin-transaction-controls { flex-direction: column; } .admin-risk-filter select { width: 100%; } }

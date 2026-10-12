@@ -1,18 +1,7 @@
 // api.js
-// Centralized HTTP client configuration.
-//
-// Every service module in this folder should route its real (non-mock)
-// requests through `apiRequest` below rather than calling fetch directly.
-// That keeps the base URL, headers, and error handling in one place, so
-// swapping in the real Spring Boot backend later means changing this file
-// (and flipping VITE_USE_MOCKS to false) — not touching UI components.
+// Centralized client for the FastAPI backend.
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api';
-
-// USE_MOCKS gates every service function between local mock data and a
-// real network call. Set VITE_USE_MOCKS=false in your .env once the
-// backend is reachable.
-export const USE_MOCKS = (import.meta.env.VITE_USE_MOCKS ?? 'true') !== 'false';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
 
 class ApiError extends Error {
   constructor(message, status, data) {
@@ -64,11 +53,6 @@ export async function apiRequest(path, options = {}) {
   }
 
   return data;
-}
-
-/** Simulates network latency for mock service calls so loading states are visible/testable. */
-export function mockDelay(ms = 500) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export { ApiError };

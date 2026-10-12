@@ -1,66 +1,58 @@
-// fraudService.js
-// Sends checkout transaction data for fraud analysis.
-//
-// The frontend never computes a risk score or decision — it only sends
-// the payload and renders whatever { transactionId, riskLevel, fraudScore,
-// decision, reasonCodes } comes back. Until POST /api/fraud/analyze is
-// live, generateMockFraudResponse (clearly labeled, isolated in
-// services/mock/mockFraud.js) stands in for it.
-
-import { apiRequest, USE_MOCKS, mockDelay } from './api';
-import { generateMockFraudResponse } from './mock/mockFraud';
+// Sends checkout transaction data to the authenticated backend fraud endpoint.
+import { apiRequest } from './api';
 
 const predictionRequests = new Map();
 
 export function analyzeTransaction(transactionPayload, attemptId) {
-  if (
-    transactionPayload.TransactionAmt === undefined ||
-    transactionPayload.TransactionAmt === null ||
-    Number.isNaN(transactionPayload.TransactionAmt)
-  ) {
+  const amount = Number(transactionPayload?.TransactionAmt);
+  if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error('Invalid transaction amount. Please check your cart.');
   }
-  
+
   if (attemptId && predictionRequests.has(attemptId)) {
     return predictionRequests.get(attemptId);
   }
 
-  const request = (async () => {
-    if (USE_MOCKS) {
-      await mockDelay(1200); // simulate model inference latency
-      return generateMockFraudResponse(transactionPayload);
+  const request = apiRequest('/fraud/predict', {
+    method: 'POST',
+    body: { ...transactionPayload, checkout_attempt_id: attemptId },
+  }).then((response) => ({
+    ...response,
+    transactionId: response.transaction_id,
+    riskLevel: response.risk_level,
+    fraudScore: response.fraud_probability,
+    modelUsed: response.model_used,
+    isMock: false,
+  }));
+
+  if (!attemptId) return request;
+
+  let trackedRequest;
+  trackedRequest = request.catch((error) => {
+    if (predictionRequests.get(attemptId) === trackedRequest) {
+      predictionRequests.delete(attemptId);
     }
-    const response = await apiRequest('/fraud/predict', { method: 'POST', body: transactionPayload });
-    // Map snake_case from backend to camelCase for frontend
-    return {
-      ...response,
-      transactionId: response.transaction_id,
-      riskLevel: response.risk_level,
-      fraudScore: response.fraud_probability,
-      isMock: false
-    };
-  })();
-
-  if (attemptId) {
-    // The app keeps one pending checkout at a time. Retain its settled promise
-    // until a new checkout attempt supplies a different ID.
-    predictionRequests.clear();
-    predictionRequests.set(attemptId, request);
-  }
-
-  return request;
+    throw error;
+  });
+  predictionRequests.clear();
+  predictionRequests.set(attemptId, trackedRequest);
+  return trackedRequest;
 }
 
 export async function getRecentFraudPredictions(limit = 10000) {
   const response = await apiRequest(`/admin/fraud/recent?limit=${encodeURIComponent(limit)}`);
-  return response.map(r => ({
-    ...r,
-    riskLevel: r.risk_level,
-    fraudScore: r.fraud_probability,
-    transactionId: r.transaction_id,
+  return response.map((prediction) => ({
+    ...prediction,
+    riskLevel: prediction.risk_level,
+    fraudScore: prediction.fraud_probability,
+    transactionId: prediction.transaction_id,
   }));
 }
 
-export async function getFraudSummary() {
+export function getFraudSummary() {
   return apiRequest('/admin/fraud/summary');
+}
+
+export function getTransactionStatus(transactionId) {
+  return apiRequest(`/transactions/${encodeURIComponent(transactionId)}/status`);
 }

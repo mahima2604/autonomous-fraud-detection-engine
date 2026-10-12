@@ -29,7 +29,7 @@ function Products() {
   return (
     <div>
       <div className="section-heading">
-        <h1>Products</h1>
+        <div><h1>Products</h1><p className="mock-note">Sample catalog for the checkout demonstration.</p></div>
       </div>
 
       {!loading && !error && (

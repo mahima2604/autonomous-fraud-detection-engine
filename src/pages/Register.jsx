@@ -96,7 +96,7 @@ function Register() {
         <p style={{ marginTop: 16, fontSize: 13.5 }}>
           Already have an account? <Link to="/login">Log in</Link>
         </p>
-        <p className="mock-note">Using mock authentication until the backend is connected.</p>
+        <p className="mock-note">Your account is stored by the backend and can be used to sign in securely.</p>
       </form>
     </div>
   );

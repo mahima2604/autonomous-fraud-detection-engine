@@ -7,21 +7,58 @@ import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 import AddressForm from '../components/checkout/AddressForm';
 import OrderSummary from '../components/checkout/OrderSummary';
-import { buildTransactionPayload, savePendingCheckout } from '../services/checkoutService';
+import { buildTransactionPayload, clearPendingCheckout, getPendingCheckout, savePendingCheckout } from '../services/checkoutService';
 import EmptyState from '../components/common/EmptyState';
 
 const EMPTY_ADDRESS = { fullName: '', line1: '', city: '', postalCode: '', country: '' };
 
 function Checkout() {
-  const { items, subtotal } = useCart();
+  const { items: cartItems, subtotal: cartSubtotal } = useCart();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [savedCheckout, setSavedCheckout] = useState(() => getPendingCheckout());
 
-  const [shipping, setShipping] = useState(EMPTY_ADDRESS);
-  const [billing, setBilling] = useState(EMPTY_ADDRESS);
-  const [sameAsShipping, setSameAsShipping] = useState(true);
-  const [paymentMethod, setPaymentMethod] = useState('CARD');
+  // Cart state can change or be cleared while checkout is awaiting review.
+  // The pending checkout is the source for resuming that same attempt.
+  const items = savedCheckout?.items?.length ? savedCheckout.items : cartItems;
+  const subtotal = savedCheckout?.items?.length ? savedCheckout.subtotal : cartSubtotal;
+
+  const [shipping, setShipping] = useState(() => savedCheckout?.shippingAddress || EMPTY_ADDRESS);
+  const [billing, setBilling] = useState(() => savedCheckout?.billingAddress || EMPTY_ADDRESS);
+  const [sameAsShipping, setSameAsShipping] = useState(() =>
+    !savedCheckout?.billingAddress || JSON.stringify(savedCheckout.billingAddress) === JSON.stringify(savedCheckout.shippingAddress));
+  const [paymentMethod, setPaymentMethod] = useState(() => savedCheckout?.paymentMethod || 'CARD');
   const [error, setError] = useState('');
+
+  if (savedCheckout?.fraudResult) {
+    const rejected = savedCheckout.fraudResult.decision === 'REJECT'
+      || savedCheckout.fraudResult.transactionStatus === 'REJECTED';
+
+    return (
+      <div>
+        <h1>Resume checkout</h1>
+        <p>{rejected
+          ? 'This saved transaction was rejected and cannot continue to payment.'
+          : 'Your checkout details and transaction are saved. Continue with this same checkout attempt.'}</p>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+          {!rejected && <button className="btn btn-primary" onClick={() => navigate('/fraud-verification')}>
+            Resume saved checkout
+          </button>}
+          <button className="btn btn-secondary" onClick={() => {
+            clearPendingCheckout();
+            setSavedCheckout(null);
+            setShipping(EMPTY_ADDRESS);
+            setBilling(EMPTY_ADDRESS);
+            setSameAsShipping(true);
+            setPaymentMethod('CARD');
+          }}>
+            Start a new checkout
+          </button>
+        </div>
+        <OrderSummary items={items} subtotal={subtotal} title="Saved Order Summary" />
+      </div>
+    );
+  }
 
   if (items.length === 0) {
     return <EmptyState title="Your cart is empty" message="Add products before checking out." />;
@@ -36,6 +73,10 @@ function Checkout() {
 
   function handleSubmit(e) {
     e.preventDefault();
+    if (savedCheckout?.fraudResult) {
+      navigate('/fraud-verification');
+      return;
+    }
     const validationError = validate();
     if (validationError) {
       setError(validationError);
@@ -53,7 +94,15 @@ function Checkout() {
       shippingAddress: shipping,
     });
 
-    savePendingCheckout({ transaction: payload, items, subtotal, paymentMethod });
+    savePendingCheckout({
+      ...savedCheckout,
+      transaction: payload,
+      items,
+      subtotal,
+      paymentMethod,
+      shippingAddress: shipping,
+      billingAddress,
+    });
     navigate('/fraud-verification');
   }
 
@@ -101,7 +150,7 @@ function Checkout() {
               ))}
             </div>
             <p className="mock-note">
-              Card details are collected on the payment step only, and are never stored by this app.
+              This demonstration does not collect card details or connect to a payment provider.
             </p>
           </div>
 

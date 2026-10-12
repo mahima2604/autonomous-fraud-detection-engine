@@ -1,6 +1,6 @@
 // FraudStatusCard.jsx
 // Renders the outcome of a fraud check the frontend received from the
-// backend (or, currently, the mock fraud service). This component does
+// backend. This component does
 // not decide anything — it only displays { riskLevel, decision,
 // reasonCodes } and reacts to `decision` for navigation copy.
 import RiskBadge from './RiskBadge';
@@ -13,8 +13,13 @@ const COPY = {
   },
   REVIEW: {
     heading: 'Additional verification required',
-    body: 'We need a bit more confirmation before this transaction can proceed. Please review the details below.',
+    body: 'This transaction is waiting for administrator review. Payment remains unavailable until the review is complete.',
     tone: 'warning',
+  },
+  REJECT: {
+    heading: 'Transaction rejected',
+    body: 'An administrator rejected this transaction. It cannot proceed to payment.',
+    tone: 'danger',
   },
   BLOCK: {
     heading: 'Transaction blocked',
@@ -32,15 +37,10 @@ function FraudStatusCard({ result }) {
         <h3>{copy.heading}</h3>
         <RiskBadge riskLevel={result.riskLevel} />
       </div>
-      <p>{copy.body}</p>
+      <p>{result.adminApproved ? 'An administrator approved this transaction. You can continue with the saved checkout.' : copy.body}</p>
       <div className="fraud-status-meta">
         <span>Reference: {result.transactionId}</span>
       </div>
-      {result.isMock && (
-        <p className="mock-note">
-          Mock fraud response for development — not a real fraud model output.
-        </p>
-      )}
     </div>
   );
 }

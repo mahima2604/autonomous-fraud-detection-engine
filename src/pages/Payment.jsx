@@ -4,7 +4,6 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { getPendingCheckout, clearPendingCheckout } from '../services/checkoutService';
-import { processPayment } from '../services/paymentService';
 import { createOrder } from '../services/orderService';
 import { useCart } from '../context/CartContext';
 import OrderSummary from '../components/checkout/OrderSummary';
@@ -29,11 +28,15 @@ function Payment() {
     );
   }
 
-  if (pending.fraudResult.decision === 'BLOCK') {
+  if (pending.fraudResult.decision !== 'APPROVE') {
     return (
       <EmptyState
         title="Payment unavailable"
-        message="This transaction was blocked during verification and cannot be paid for."
+        message={pending.fraudResult.decision === 'REVIEW'
+          ? 'This transaction is awaiting administrator review and cannot be paid until approved.'
+          : pending.fraudResult.decision === 'REJECT'
+            ? 'This transaction was rejected after administrator review and cannot be paid for.'
+            : 'This transaction was blocked during verification and cannot be paid for.'}
         action={<Link to="/cart" className="btn btn-primary btn-sm">Return to cart</Link>}
       />
     );
@@ -43,17 +46,12 @@ function Payment() {
     setProcessing(true);
     setError('');
     try {
-      const payment = await processPayment({
-        transactionId: pending.fraudResult.transactionId,
-        amount: pending.subtotal,
-        paymentMethod: pending.paymentMethod,
-      });
-
       const order = await createOrder({
-        items: pending.items.map((i) => i.name),
-        amount: pending.subtotal,
-        paymentId: payment.paymentId,
         transactionId: pending.fraudResult.transactionId,
+        items: pending.items.map((item) => ({ productId: item.id, quantity: item.quantity })),
+        paymentMethod: pending.paymentMethod,
+        shippingAddress: pending.shippingAddress,
+        billingAddress: pending.billingAddress,
       });
 
       sessionStorage.setItem('last_order', JSON.stringify(order));
@@ -72,17 +70,16 @@ function Payment() {
       <div>
         <h1>Payment</h1>
         <div className="card card-padded" style={{ marginBottom: 20 }}>
-          <h3>Secure checkout</h3>
+          <h3>Payment simulation</h3>
           <p>
-            This is a simulated payment for demonstration purposes. No real charge is made and
-            no card numbers are collected or stored by this application.
+            This records a simulated payment only. No payment provider is connected and no real charge is made.
           </p>
           <p style={{ fontWeight: 600, color: 'var(--color-text)' }}>
             Payment method: {pending.paymentMethod === 'CARD' ? 'Credit / Debit Card' : pending.paymentMethod === 'PAYPAL' ? 'PayPal' : 'Bank Transfer'}
           </p>
           {error && <div className="form-error-banner">{error}</div>}
           <button className="btn btn-primary btn-block" onClick={handlePay} disabled={processing}>
-            {processing ? 'Processing payment…' : `Pay ${formatCurrency(pending.subtotal)}`}
+            {processing ? 'Recording order...' : `Confirm simulated payment: ${formatCurrency(pending.subtotal)}`}
           </button>
         </div>
       </div>

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import RiskBadge from '../../components/fraud/RiskBadge';
-import { getTransactions } from '../../services/adminTransactionService';
+import {
+  approveReview,
+  getPendingReviews,
+  getTransactions,
+  rejectReview,
+} from '../../services/adminTransactionService';
 import { formatCurrency, formatDateTime } from '../../utils/formatters';
 import './AdminTransactions.css';
 
@@ -14,9 +19,15 @@ const RISK_FILTERS = [
 
 function AdminTransactions() {
   const [transactions, setTransactions] = useState([]);
+  const [pendingReviews, setPendingReviews] = useState([]);
   const [search, setSearch] = useState('');
   const [riskFilter, setRiskFilter] = useState('ALL');
   const [loading, setLoading] = useState(true);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [reviewError, setReviewError] = useState(false);
+  const [reviewActionId, setReviewActionId] = useState(null);
+  const [reviewActionDecision, setReviewActionDecision] = useState(null);
+  const [reviewFeedback, setReviewFeedback] = useState(null);
   const [error, setError] = useState(false);
 
   const loadTransactions = async () => {
@@ -31,7 +42,45 @@ function AdminTransactions() {
     }
   };
 
-  useEffect(() => { loadTransactions(); }, []);
+  const loadPendingReviews = async () => {
+    setReviewsLoading(true);
+    setReviewError(false);
+    try {
+      setPendingReviews(await getPendingReviews());
+    } catch {
+      setReviewError(true);
+    } finally {
+      setReviewsLoading(false);
+    }
+  };
+
+  const handleReviewDecision = async (transactionId, decision) => {
+    setReviewActionId(transactionId);
+    setReviewActionDecision(decision);
+    setReviewFeedback(null);
+    try {
+      if (decision === 'APPROVE') await approveReview(transactionId);
+      else await rejectReview(transactionId);
+      setReviewFeedback({
+        type: 'success',
+        message: `Transaction ${transactionId} ${decision === 'APPROVE' ? 'approved' : 'rejected'}.`,
+      });
+      await Promise.all([loadPendingReviews(), loadTransactions()]);
+    } catch (actionError) {
+      setReviewFeedback({
+        type: 'error',
+        message: actionError.message || 'Unable to update this review. Refresh the queue and try again.',
+      });
+    } finally {
+      setReviewActionId(null);
+      setReviewActionDecision(null);
+    }
+  };
+
+  useEffect(() => {
+    loadTransactions();
+    loadPendingReviews();
+  }, []);
 
   const filteredTransactions = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -52,6 +101,59 @@ function AdminTransactions() {
       <div className="admin-transactions-heading">
         <div><p className="admin-eyebrow">Account activity</p><h1>Transactions</h1></div>
         <button className="btn btn-secondary" onClick={loadTransactions} disabled={loading}>Refresh</button>
+      </div>
+
+      <div className="card admin-review-card">
+        <div className="admin-review-heading">
+          <div><h2>Pending fraud reviews</h2><p>Review MEDIUM risk transactions before customers can continue to payment.</p></div>
+          <button className="btn btn-secondary" onClick={loadPendingReviews} disabled={reviewsLoading}>
+            {reviewsLoading ? 'Refreshing...' : 'Refresh reviews'}
+          </button>
+        </div>
+        {reviewFeedback && (
+          <p className={`admin-review-feedback admin-review-feedback-${reviewFeedback.type}`} role={reviewFeedback.type === 'error' ? 'alert' : 'status'}>
+            {reviewFeedback.message}
+          </p>
+        )}
+        {reviewsLoading ? <p className="admin-transactions-state">Loading pending reviews...</p> : reviewError ? (
+          <div className="admin-transactions-state admin-transactions-error">
+            <p>Unable to load pending reviews.</p>
+            <button className="btn btn-secondary btn-sm" onClick={loadPendingReviews}>Retry</button>
+          </div>
+        ) : pendingReviews.length === 0 ? (
+          <p className="admin-transactions-state">There are no transactions awaiting review.</p>
+        ) : (
+          <div className="table-scroll"><table className="data-table">
+            <thead><tr><th>Transaction reference</th><th>Customer</th><th>Amount</th><th>Fraud score</th><th>Risk</th><th>Actions</th></tr></thead>
+            <tbody>{pendingReviews.map((transaction) => {
+              const prediction = transaction.fraud_prediction;
+              const customer = transaction.customer;
+              const busy = reviewActionId === transaction.transaction_id;
+              return <tr key={transaction.transaction_id}>
+                <td>TXN-{transaction.transaction_id}</td>
+                <td>
+                  <div className="admin-review-customer">
+                    <span>{customer?.name || 'Customer name unavailable'}</span>
+                    <small>{customer?.email || (customer?.user_id ? `User #${customer.user_id}` : 'Customer unavailable')}</small>
+                  </div>
+                </td>
+                <td>{formatCurrency(transaction.amount || 0)}</td>
+                <td>{prediction ? prediction.fraud_probability : '—'}</td>
+                <td>{prediction ? <RiskBadge riskLevel={prediction.risk_level} /> : '—'}</td>
+                <td>
+                  <div className="admin-review-actions">
+                    <button className="btn btn-primary btn-sm" onClick={() => handleReviewDecision(transaction.transaction_id, 'APPROVE')} disabled={reviewActionId !== null}>
+                      {busy && reviewActionDecision === 'APPROVE' ? 'Approving...' : 'Approve'}
+                    </button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleReviewDecision(transaction.transaction_id, 'REJECT')} disabled={reviewActionId !== null}>
+                      {busy && reviewActionDecision === 'REJECT' ? 'Rejecting...' : 'Reject'}
+                    </button>
+                  </div>
+                </td>
+              </tr>;
+            })}</tbody>
+          </table></div>
+        )}
       </div>
 
       <div className="card admin-transactions-card">

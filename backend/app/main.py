@@ -25,18 +25,45 @@ from app.services.auth import (
     create_access_token, create_admin_access_token, get_current_admin, get_current_user,
     hash_password, verify_password,
 )
+from app.cors import install_global_cors
 
 logger = logging.getLogger(__name__)
 
-def initialize_database():
+def _add_missing_order_columns(database_engine):
+    """Add columns missing from an older orders table without rebuilding it."""
+    table_name = Order.__table__.name
+    quoted_table = database_engine.dialect.identifier_preparer.quote(table_name)
+    with database_engine.begin() as connection:
+        existing_columns = {
+            column["name"]
+            for column in inspect(connection).get_columns(table_name)
+        }
+        for column in Order.__table__.columns:
+            if column.name in existing_columns:
+                continue
+            if column.primary_key:
+                raise RuntimeError(
+                    f"Cannot add missing primary key column {table_name}.{column.name} safely"
+                )
+            quoted_column = database_engine.dialect.identifier_preparer.quote(column.name)
+            column_type = column.type.compile(dialect=database_engine.dialect)
+            # Existing rows need to remain valid; SQLite cannot add a NOT NULL
+            # column without a default, and no truthful value can be inferred.
+            connection.execute(text(
+                f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_column} {column_type}"
+            ))
+
+
+def initialize_database(database_engine=None):
     """Create missing tables and apply the existing additive schema migrations."""
-    Base.metadata.create_all(bind=engine)
-    if "name" not in {column["name"] for column in inspect(engine).get_columns("users")}:
-        with engine.begin() as connection:
+    database_engine = database_engine or engine
+    Base.metadata.create_all(bind=database_engine)
+    if "name" not in {column["name"] for column in inspect(database_engine).get_columns("users")}:
+        with database_engine.begin() as connection:
             connection.execute(text("ALTER TABLE users ADD COLUMN name VARCHAR"))
-    transaction_columns = {column["name"] for column in inspect(engine).get_columns("transactions")}
+    transaction_columns = {column["name"] for column in inspect(database_engine).get_columns("transactions")}
     if "checkout_attempt_id" not in transaction_columns:
-        with engine.begin() as connection:
+        with database_engine.begin() as connection:
             connection.execute(text("ALTER TABLE transactions ADD COLUMN checkout_attempt_id VARCHAR(64)"))
     review_columns = {
         "review_decision": "VARCHAR",
@@ -46,14 +73,14 @@ def initialize_database():
     }
     for column_name, column_type in review_columns.items():
         if column_name not in transaction_columns:
-            with engine.begin() as connection:
+            with database_engine.begin() as connection:
                 connection.execute(text(f"ALTER TABLE transactions ADD COLUMN {column_name} {column_type}"))
-    with engine.begin() as connection:
+    _add_missing_order_columns(database_engine)
+    with database_engine.begin() as connection:
         connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_transactions_checkout_attempt_id ON transactions (checkout_attempt_id)"))
 
 
 from app.admin_provisioning import bootstrap_demo_admin
-from fastapi.middleware.cors import CORSMiddleware
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -66,15 +93,6 @@ app = FastAPI(
     description="Backend API for e-commerce fraud detection",
     version="1.0.0",
     lifespan=lifespan,
-)
-
-# Enable CORS for the frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if origin.strip()],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 FRAUD_REVIEW_THRESHOLD = float(os.getenv("FRAUD_REVIEW_THRESHOLD", "0.30"))
@@ -849,3 +867,7 @@ def get_admin_customer_details(
             for transaction, prediction in transactions
         ],
     }
+
+
+# Wrap the completed FastAPI stack so CORS headers also cover unhandled 500s.
+install_global_cors(app)

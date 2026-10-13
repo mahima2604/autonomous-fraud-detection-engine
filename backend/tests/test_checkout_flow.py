@@ -45,6 +45,36 @@ def database(tmp_path):
         engine.dispose()
 
 
+@pytest.fixture
+def database_with_legacy_orders(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-orders.sqlite'}")
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE orders")
+        connection.exec_driver_sql("""
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                transaction_id INTEGER NOT NULL,
+                items JSON NOT NULL,
+                amount FLOAT NOT NULL,
+                currency VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                payment_status VARCHAR NOT NULL,
+                payment_method VARCHAR NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+        """)
+    main.initialize_database(database_engine=engine)
+    factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    session = factory()
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def make_user(db, email):
     user = User(name="Test Customer", email=email, hashed_password=hash_password("test-only-password"))
     db.add(user)
@@ -304,6 +334,43 @@ def test_admin_approved_review_can_order_but_blocked_and_rejected_cannot(databas
     assert blocked_error.value.status_code == 409
 
 
+def test_admin_approved_review_creates_idempotent_357_50_order(database_with_legacy_orders, monkeypatch):
+    database = database_with_legacy_orders
+    admin = Admin(email="three-item-review-admin@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    database.refresh(admin)
+    user = make_user(database, "three-item-review@example.test")
+    monkeypatch.setattr(main, "baseline_pipeline", FixedProbabilityPipeline(0.5))
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+    prediction = main.predict_fraud(
+        main.TransactionInput(TransactionAmt=357.5, checkout_attempt_id="three-item-review-attempt"),
+        db=database,
+        current_user=user,
+    )
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(), db=database, current_admin=admin)
+    request = main.CreateOrderRequest(
+        transaction_id=prediction.transaction_id,
+        items=[
+            main.OrderItemRequest(product_id="p1", quantity=1),
+            main.OrderItemRequest(product_id="p2", quantity=1),
+            main.OrderItemRequest(product_id="p3", quantity=1),
+        ],
+        payment_method="CARD",
+        shipping_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
+        billing_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
+    )
+
+    first = main.create_order(request, db=database, current_user=user)
+    retry = main.create_order(request, db=database, current_user=user)
+
+    assert first["amount"] == 357.5
+    assert first["transaction_id"] == prediction.transaction_id
+    assert first["paymentStatus"] == "SIMULATED"
+    assert retry["id"] == first["id"]
+    assert database.query(Order).count() == 1
+
+
 def test_user_cannot_order_another_users_transaction(database, monkeypatch):
     owner = make_user(database, "owner@example.test")
     other_user = make_user(database, "other@example.test")
@@ -343,16 +410,14 @@ def test_authentication_tokens_are_role_separated(database):
 
 
 
-def test_additive_startup_migration_preserves_legacy_rows(tmp_path, monkeypatch):
+def test_additive_startup_migration_preserves_legacy_rows(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'legacy.sqlite'}")
     with engine.begin() as connection:
         connection.exec_driver_sql("CREATE TABLE users (id INTEGER PRIMARY KEY, email VARCHAR, hashed_password VARCHAR, is_active BOOLEAN, created_at DATETIME)")
         connection.exec_driver_sql("CREATE TABLE transactions (id INTEGER PRIMARY KEY, user_id INTEGER, transaction_data JSON, amount FLOAT, currency VARCHAR, status VARCHAR, created_at DATETIME)")
         connection.exec_driver_sql("INSERT INTO users (id, email, hashed_password, is_active) VALUES (1, 'legacy@example.test', 'test-hash', 1)")
         connection.exec_driver_sql("INSERT INTO transactions (id, user_id, transaction_data, amount, currency, status) VALUES (1, 1, '{}', 129.0, 'USD', 'PENDING')")
-    monkeypatch.setattr(main, "engine", engine)
-
-    main.initialize_database()
+    main.initialize_database(database_engine=engine)
 
     inspector = inspect(engine)
     assert "name" in {column["name"] for column in inspector.get_columns("users")}
@@ -365,6 +430,73 @@ def test_additive_startup_migration_preserves_legacy_rows(tmp_path, monkeypatch)
         indexes = {index["name"] for index in inspector.get_indexes("transactions")}
         assert "uq_transactions_checkout_attempt_id" in indexes
     engine.dispose()
+
+
+def test_order_schema_migration_adds_missing_columns_and_preserves_rows(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-order-columns.sqlite'}")
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP TABLE orders")
+        connection.exec_driver_sql("""
+            CREATE TABLE orders (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                transaction_id INTEGER NOT NULL,
+                items JSON NOT NULL,
+                amount FLOAT NOT NULL,
+                currency VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                payment_status VARCHAR NOT NULL,
+                payment_method VARCHAR NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+        """)
+        connection.exec_driver_sql("""
+            INSERT INTO orders
+                (id, user_id, transaction_id, items, amount, currency, status, payment_status, payment_method, created_at)
+            VALUES
+                (44, 8, 19, '[{"product_id":"p1","quantity":1}]', 129.0, 'USD', 'PROCESSING', 'SIMULATED', 'CARD', '2025-01-02 03:04:05')
+        """)
+
+    main.initialize_database(database_engine=engine)
+    main.initialize_database(database_engine=engine)
+
+    inspector = inspect(engine)
+    order_columns = {column["name"]: column for column in inspector.get_columns("orders")}
+    model_columns = {column.name for column in Order.__table__.columns}
+    assert model_columns.issubset(order_columns)
+    assert order_columns["shipping_address"]["type"].__class__.__name__ == "JSON"
+    assert order_columns["billing_address"]["type"].__class__.__name__ == "JSON"
+    with engine.connect() as connection:
+        preserved = connection.exec_driver_sql(
+            "SELECT id, user_id, transaction_id, items, amount FROM orders WHERE id = 44"
+        ).one()
+    assert tuple(preserved) == (44, 8, 19, '[{"product_id":"p1","quantity":1}]', 129.0)
+    engine.dispose()
+
+
+def test_order_schema_migration_fails_when_primary_key_is_missing(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy-orders-without-id.sqlite'}")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("""
+            CREATE TABLE orders (
+                user_id INTEGER NOT NULL,
+                transaction_id INTEGER NOT NULL,
+                items JSON NOT NULL,
+                amount FLOAT NOT NULL,
+                currency VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                payment_status VARCHAR NOT NULL,
+                payment_method VARCHAR NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+        """)
+
+    try:
+        with pytest.raises(RuntimeError, match=r"Cannot add missing primary key column orders\.id safely"):
+            main._add_missing_order_columns(engine)
+    finally:
+        engine.dispose()
 
 def test_catalog_and_order_routes_are_registered_without_admin_creation_route():
     paths = {(method, route.path) for route in main.app.routes for method in getattr(route, "methods", set())}

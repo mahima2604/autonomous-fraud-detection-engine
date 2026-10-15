@@ -13,8 +13,8 @@ import EmptyState from '../components/common/EmptyState';
 
 function FraudVerification() {
   const navigate = useNavigate();
-  const { logout } = useAuth();
-  const pending = getPendingCheckout();
+  const { logout, user } = useAuth();
+  const pending = getPendingCheckout(user?.id);
 
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -24,7 +24,8 @@ function FraudVerification() {
   const [statusNotice, setStatusNotice] = useState('');
 
   async function refreshStatus(quiet = false, isActive = () => true) {
-    if (!pending?.fraudResult?.transactionId) {
+    const transactionId = pending?.transactionId || pending?.fraudResult?.transactionId;
+    if (!transactionId) {
       if (!quiet && isActive()) setStatusError('Transaction reference is missing. Return to checkout to start again.');
       return;
     }
@@ -33,17 +34,19 @@ function FraudVerification() {
     setStatusError('');
     setStatusNotice('');
     try {
-      const current = await getTransactionStatus(pending.fraudResult.transactionId);
+      const current = await getTransactionStatus(transactionId);
       if (!isActive()) return;
       const modelPrediction = current.fraud_prediction;
-      const modelDecision = modelPrediction?.decision || pending.fraudResult.modelDecision || pending.fraudResult.decision;
-      const isApprovedReview = current.status === 'REVIEW_APPROVED' && current.review_decision === 'APPROVE';
+      const savedResult = pending.fraudResult || {};
+      const modelDecision = modelPrediction?.decision || savedResult.modelDecision || savedResult.decision;
+      const isApprovedReview = ['REVIEW_APPROVED', 'ORDERED'].includes(current.status)
+        && current.review_decision === 'APPROVE';
       const isRejectedReview = current.status === 'REJECTED' && current.review_decision === 'REJECT';
       const updatedResult = {
-        ...pending.fraudResult,
+        ...savedResult,
         transactionId: current.transaction_id,
-        riskLevel: modelPrediction?.risk_level || pending.fraudResult.riskLevel,
-        fraudScore: modelPrediction?.fraud_probability ?? pending.fraudResult.fraudScore,
+        riskLevel: modelPrediction?.risk_level || savedResult.riskLevel,
+        fraudScore: modelPrediction?.fraud_probability ?? savedResult.fraudScore,
         modelDecision,
         decision: isApprovedReview ? 'APPROVE' : isRejectedReview ? 'REJECT' : modelDecision,
         transactionStatus: current.status,
@@ -51,13 +54,18 @@ function FraudVerification() {
         reviewedAt: current.reviewed_at,
         adminApproved: isApprovedReview,
       };
-      savePendingCheckout({ ...pending, fraudResult: updatedResult });
+      savePendingCheckout({ ...pending, transactionId: current.transaction_id, fraudResult: updatedResult });
       setResult(updatedResult);
       setStatusNotice(isApprovedReview
         ? 'An administrator approved this transaction. Your saved checkout is ready to continue.'
         : isRejectedReview
           ? 'An administrator rejected this transaction. Payment is unavailable.'
-          : 'This transaction is still awaiting administrator review.');
+        : isRejectedReview || current.status === 'BLOCKED'
+          ? 'This transaction was rejected or blocked. Payment is unavailable.'
+          : current.status === 'APPROVED'
+            ? 'This transaction is approved. Your saved checkout is ready to continue.'
+            : 'This transaction is still awaiting administrator review.');
+      if (isApprovedReview) navigate('/payment', { replace: true });
     } catch (statusRequestError) {
       if (!isActive()) return;
       setStatusError(statusRequestError.status === 401
@@ -73,10 +81,15 @@ function FraudVerification() {
   function runFraudCheck(isActive = () => true) {
     setLoading(true);
     setError('');
+    if (!pending?.transaction) {
+      setLoading(false);
+      setError('Saved checkout transaction details are missing. Return to checkout to start again.');
+      return;
+    }
     analyzeTransaction(pending.transaction, pending.attemptId)
       .then((res) => {
         if (isActive()) {
-          savePendingCheckout({ ...pending, fraudResult: res });
+          savePendingCheckout({ ...pending, transactionId: res.transactionId, fraudResult: res });
           setResult(res);
           if (res.decision === 'REVIEW') refreshStatus(true, isActive);
         }
@@ -89,10 +102,16 @@ function FraudVerification() {
     if (!pending) return;
     let active = true;
 
+    if (pending.transactionId || pending.fraudResult?.transactionId) {
+      refreshStatus(false, () => active);
+      return () => {
+        active = false;
+      };
+    }
+
     if (pending.fraudResult && !pending.fraudResult.isMock) {
       setResult(pending.fraudResult);
       setLoading(false);
-      if (pending.fraudResult.decision === 'REVIEW') refreshStatus(true, () => active);
       return () => {
         active = false;
       };

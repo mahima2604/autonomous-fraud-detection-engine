@@ -4,6 +4,10 @@ export function getTransactions() {
   return apiRequest('/admin/transactions');
 }
 
+export function getTransactionExplanation(transactionId) {
+  return apiRequest(`/admin/transactions/${encodeURIComponent(transactionId)}/explanation`);
+}
+
 export function getPendingReviews() {
   return apiRequest('/admin/reviews/pending');
 }

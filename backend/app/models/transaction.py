@@ -12,6 +12,7 @@ class Transaction(Base):
     
     # Store the transaction fields as JSON to keep it flexible and avoid mapping 394 columns
     transaction_data = Column(JSON) 
+    checkout_snapshot = Column(JSON, nullable=True)
     
     amount = Column(Float)
     currency = Column(String, default="USD")

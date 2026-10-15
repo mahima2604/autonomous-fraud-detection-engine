@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional
 import joblib
@@ -9,7 +9,7 @@ import os
 import pandas as pd
 import sys
 from sqlalchemy.orm import Session
-from sqlalchemy import inspect, text, func
+from sqlalchemy import inspect, text, func, and_, or_
 
 # Ensure backend directory is in sys.path if not running module properly 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -65,6 +65,9 @@ def initialize_database(database_engine=None):
     if "checkout_attempt_id" not in transaction_columns:
         with database_engine.begin() as connection:
             connection.execute(text("ALTER TABLE transactions ADD COLUMN checkout_attempt_id VARCHAR(64)"))
+    if "checkout_snapshot" not in transaction_columns:
+        with database_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE transactions ADD COLUMN checkout_snapshot JSON"))
     review_columns = {
         "review_decision": "VARCHAR",
         "reviewed_by_admin_id": "INTEGER REFERENCES admins(id)",
@@ -108,6 +111,123 @@ def classify_fraud_score(score):
     if score <= FRAUD_BLOCK_THRESHOLD:
         return "MEDIUM", "REVIEW"
     return "HIGH", "BLOCK"
+
+
+BASELINE_FEATURES = (
+    "TransactionAmt",
+    "ProductCD",
+    "P_emaildomain",
+    "DeviceType",
+    "DeviceInfo",
+)
+
+
+def build_prediction_explanation(transaction, prediction):
+    """Describe stored model inputs and, when verifiable, linear log-odds contributions."""
+    payload = transaction.transaction_data or {}
+    pipeline = baseline_pipeline if artifacts_loaded else None
+    preprocessor = None
+    feature_names = list(BASELINE_FEATURES)
+    if pipeline is not None:
+        try:
+            preprocessor = pipeline.named_steps["preprocessor"]
+            feature_names = list(preprocessor.feature_names_in_)
+        except (AttributeError, KeyError, TypeError):
+            preprocessor = None
+
+    feature_values = [{"name": name, "value": payload.get(name)} for name in feature_names]
+    explanation = {
+        "transaction_id": transaction.id,
+        "model_name": prediction.model_used,
+        "model_version": getattr(pipeline, "model_version_", None) if pipeline is not None else None,
+        "risk_score": prediction.fraud_probability,
+        "risk_category": prediction.risk_level,
+        "model_decision": prediction.decision,
+        "thresholds": {
+            "review": FRAUD_REVIEW_THRESHOLD,
+            "block": FRAUD_BLOCK_THRESHOLD,
+            "applicable_rule": (
+                f"score <= {FRAUD_REVIEW_THRESHOLD:.2f}"
+                if prediction.decision == "APPROVE"
+                else f"{FRAUD_REVIEW_THRESHOLD:.2f} < score <= {FRAUD_BLOCK_THRESHOLD:.2f}"
+                if prediction.decision == "REVIEW"
+                else f"score > {FRAUD_BLOCK_THRESHOLD:.2f}"
+            ),
+        },
+        "features": feature_values,
+        "attribution_available": False,
+        "feature_contributions": [],
+        "attribution_note": "Precise feature attribution is unavailable for this stored prediction.",
+        "review": {
+            "transaction_status": transaction.status,
+            "decision": transaction.review_decision,
+            "reviewed_at": transaction.reviewed_at,
+        },
+    }
+
+    if pipeline is None or preprocessor is None:
+        return explanation
+
+    try:
+        classifier = pipeline.named_steps["classifier"]
+        if len(classifier.classes_) != 2 or 1 not in classifier.classes_:
+            return explanation
+
+        model_input = pd.DataFrame([{name: payload.get(name) for name in feature_names}], columns=feature_names)
+        transformed = preprocessor.transform(model_input)
+        if hasattr(transformed, "toarray"):
+            transformed = transformed.toarray()
+        transformed = transformed[0]
+        output_names = list(preprocessor.get_feature_names_out())
+        if len(output_names) != len(transformed):
+            return explanation
+
+        classes = list(classifier.classes_)
+        positive_index = classes.index(1)
+        coefficient_index = 0 if len(classes) == 2 else positive_index
+        coefficients = classifier.coef_[coefficient_index]
+        intercept = float(classifier.intercept_[coefficient_index])
+        linear_score = float(intercept + sum(float(value) * float(weight) for value, weight in zip(transformed, coefficients)))
+        current_probability = float(pipeline.predict_proba(model_input)[0][positive_index])
+        if not math.isclose(current_probability, prediction.fraud_probability, abs_tol=0.000051):
+            explanation["attribution_note"] = (
+                "The currently loaded model does not reproduce the stored score, so feature attribution is unavailable."
+            )
+            return explanation
+
+        grouped = {name: 0.0 for name in feature_names}
+        sorted_features = sorted(feature_names, key=len, reverse=True)
+        for output_name, value, coefficient in zip(output_names, transformed, coefficients):
+            encoded_name = output_name.split("__", 1)[-1]
+            source = next(
+                (name for name in sorted_features if encoded_name == name or encoded_name.startswith(f"{name}_")),
+                None,
+            )
+            if source is None:
+                return explanation
+            grouped[source] += float(value) * float(coefficient)
+
+        explanation["attribution_available"] = True
+        explanation["feature_contributions"] = [
+            {
+                "name": name,
+                "contribution_log_odds": round(grouped[name], 6),
+                "direction": "increases" if grouped[name] > 0 else "decreases" if grouped[name] < 0 else "no change",
+            }
+            for name in feature_names
+        ]
+        explanation["baseline_log_odds"] = round(intercept, 6)
+        explanation["model_log_odds"] = round(linear_score, 6)
+        explanation["attribution_note"] = (
+            "Contributions are to the Logistic Regression log-odds relative to its intercept; "
+            "they describe model association, not causation. Categorical one-hot contributions are grouped by input feature."
+        )
+    except Exception:
+        # Keep the factual stored score and inputs available if a future artifact
+        # no longer exposes the fitted linear pipeline used for this prediction.
+        return explanation
+
+    return explanation
 
 # Load artifacts at startup
 try:
@@ -204,6 +324,7 @@ class TransactionInput(BaseModel):
     DeviceType: Optional[str] = None
     DeviceInfo: Optional[str] = None
     checkout_attempt_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    checkout_snapshot: Optional[dict] = None
 
     @validator("TransactionAmt", "dist1", "dist2", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14", "card1", "card2", "card3", "card5", "addr1", "addr2")
     def reject_non_finite_numbers(cls, value):
@@ -266,6 +387,22 @@ class AdminReviewRequest(BaseModel):
         normalized = value.strip()
         return normalized or None
 
+
+def derive_checkout_product_category(checkout_snapshot):
+    """Use the trusted catalog category as ProductCD for storefront checkouts."""
+    categories = {
+        product["category"]
+        for item in (checkout_snapshot or {}).get("items", [])
+        if isinstance(item, dict)
+        for product in [get_product(item.get("product_id"))]
+        if product is not None and product.get("category")
+    }
+    if not categories:
+        return "UNKNOWN"
+    if len(categories) == 1:
+        return next(iter(categories))
+    return "Mixed"
+
 @app.get("/")
 def read_root():
     return {"message": "Fraud Detection Backend is running"}
@@ -325,7 +462,10 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
         raise HTTPException(status_code=500, detail="Model artifacts are not loaded.")
         
     try:
-        transaction_data = transaction.model_dump(exclude={"checkout_attempt_id"})
+        transaction_data = transaction.model_dump(exclude={"checkout_attempt_id", "checkout_snapshot"})
+        if transaction.checkout_snapshot is not None:
+            # ProductCD is derived from the backend catalog, not trusted from the browser.
+            transaction_data["ProductCD"] = derive_checkout_product_category(transaction.checkout_snapshot)
         if transaction.checkout_attempt_id:
             existing = db.query(Transaction).filter(
                 Transaction.checkout_attempt_id == transaction.checkout_attempt_id
@@ -354,6 +494,7 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
             user_id=current_user.id,
             amount=transaction.TransactionAmt,
             transaction_data=transaction_data,
+            checkout_snapshot=transaction.checkout_snapshot,
             checkout_attempt_id=transaction.checkout_attempt_id,
             status={"APPROVE": "APPROVED", "REVIEW": "REVIEW", "BLOCK": "BLOCKED"}[decision],
         )
@@ -433,9 +574,28 @@ def create_order(request: CreateOrderRequest, db: Session = Depends(get_db), cur
     if not (model_approved or admin_approved_review):
         raise HTTPException(status_code=409, detail="This transaction is not approved for payment")
 
+    # Once captured, the backend snapshot is authoritative for resumed checkout.
+    # Legacy transactions without snapshots continue to use the validated request.
+    snapshot = transaction.checkout_snapshot
+    if snapshot:
+        try:
+            items = [OrderItemRequest(**item) for item in snapshot["items"]]
+            shipping_address = OrderAddressInput(**snapshot["shipping_address"])
+            billing_address = OrderAddressInput(**snapshot["billing_address"])
+            payment_method = snapshot["payment_method"]
+            if payment_method not in {"CARD", "PAYPAL", "BANK_TRANSFER"}:
+                raise ValueError("Unsupported payment method")
+        except (KeyError, TypeError, ValueError, ValidationError) as error:
+            raise HTTPException(status_code=409, detail="Saved checkout details are incomplete; start a new checkout") from error
+    else:
+        items = request.items
+        shipping_address = request.shipping_address
+        billing_address = request.billing_address
+        payment_method = request.payment_method
+
     priced_items = []
     total = 0.0
-    for requested_item in request.items:
+    for requested_item in items:
         product = get_product(requested_item.product_id)
         if product is None:
             raise HTTPException(status_code=422, detail="A selected product is unavailable")
@@ -458,13 +618,13 @@ def create_order(request: CreateOrderRequest, db: Session = Depends(get_db), cur
         user_id=current_user.id,
         transaction_id=transaction.id,
         items=priced_items,
-        shipping_address=request.shipping_address.model_dump(),
-        billing_address=request.billing_address.model_dump(),
+        shipping_address=shipping_address.model_dump(),
+        billing_address=billing_address.model_dump(),
         amount=total,
         currency=transaction.currency or "USD",
         status="PROCESSING",
         payment_status="SIMULATED",
-        payment_method=request.payment_method,
+        payment_method=payment_method,
     )
     transaction.status = "ORDERED"
     db.add(order)
@@ -505,6 +665,7 @@ def get_transaction_status(
         "status": transaction.status,
         "review_decision": transaction.review_decision,
         "reviewed_at": transaction.reviewed_at,
+        "checkout_snapshot": transaction.checkout_snapshot,
         "fraud_prediction": (
             {
                 "fraud_probability": prediction.fraud_probability,
@@ -518,7 +679,7 @@ def get_transaction_status(
     }
 
 @app.get("/api/admin/fraud/recent")
-def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), current_admin: Admin = Depends(get_current_admin)):
+def get_recent_predictions(limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db), current_admin: Admin = Depends(get_current_admin)):
     from sqlalchemy.orm import aliased
 
     ranked_predictions = (
@@ -543,6 +704,10 @@ def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), curre
         .join(Transaction, LatestPrediction.transaction_id == Transaction.id)
         .outerjoin(User, Transaction.user_id == User.id)
         .filter(ranked_predictions.c.row_number == 1)
+        .filter(or_(
+            ranked_predictions.c.decision.in_(("REVIEW", "BLOCK")),
+            Transaction.status.in_(("REVIEW", "REVIEW_APPROVED", "REJECTED", "BLOCKED")),
+        ))
         .order_by(LatestPrediction.created_at.desc(), LatestPrediction.id.desc())
         .limit(limit)
         .all()
@@ -558,6 +723,9 @@ def get_recent_predictions(limit: int = 10, db: Session = Depends(get_db), curre
             "decision": pred.decision,
             "model_used": pred.model_used,
             "created_at": pred.created_at,
+            "status": transaction.status,
+            "review_decision": transaction.review_decision,
+            "reviewed_at": transaction.reviewed_at,
             "amount": transaction.amount,
             "customer_name": customer.name if customer is not None else None,
             "customer_email": customer.email if customer is not None else None,
@@ -598,8 +766,6 @@ def get_fraud_summary(db: Session = Depends(get_db), current_admin: Admin = Depe
 
 @app.get("/api/admin/transactions")
 def get_admin_transactions(db: Session = Depends(get_db), current_admin: Admin = Depends(get_current_admin)):
-    from sqlalchemy.orm import aliased
-
     # Rank predictions explicitly because the database permits multiple rows
     # per transaction while the ORM relationship is configured as one-to-one.
     ranked_predictions = (
@@ -619,43 +785,73 @@ def get_admin_transactions(db: Session = Depends(get_db), current_admin: Admin =
         .subquery()
     )
 
-    LatestPrediction = aliased(FraudPrediction, ranked_predictions)
     rows = (
-        db.query(Transaction, User, LatestPrediction)
-        .outerjoin(User, Transaction.user_id == User.id)
-        .outerjoin(
-            ranked_predictions,
-            (LatestPrediction.transaction_id == Transaction.id)
-            & (ranked_predictions.c.row_number == 1),
+        db.query(
+            Transaction,
+            User,
+            ranked_predictions.c.id.label("prediction_id"),
+            ranked_predictions.c.fraud_probability,
+            ranked_predictions.c.risk_level,
+            ranked_predictions.c.decision,
+            ranked_predictions.c.model_used,
+            ranked_predictions.c.created_at.label("prediction_created_at"),
+            Order.id.label("order_id"),
         )
+        .outerjoin(User, Transaction.user_id == User.id)
+        .outerjoin(ranked_predictions, and_(
+            ranked_predictions.c.transaction_id == Transaction.id,
+            ranked_predictions.c.row_number == 1,
+        ))
+        .outerjoin(Order, Order.transaction_id == Transaction.id)
         .order_by(Transaction.created_at.desc(), Transaction.id.desc())
         .all()
     )
 
-    return [
-        {
+    results = []
+    for transaction, customer, prediction_id, fraud_probability, risk_level, decision, model_used, prediction_created_at, order_id in rows:
+        result = {
             "transaction_id": transaction.id,
             "amount": transaction.amount,
             "currency": transaction.currency,
             "status": transaction.status,
+            "review_decision": transaction.review_decision,
+            "reviewed_at": transaction.reviewed_at,
             "created_at": transaction.created_at,
+            "order_id": order_id,
             "customer": (
                 {"user_id": customer.id, "name": customer.name, "email": customer.email}
                 if customer is not None else None
             ),
-            "fraud_prediction": (
-                {
-                    "fraud_probability": prediction.fraud_probability,
-                    "risk_level": prediction.risk_level,
-                    "decision": prediction.decision,
-                    "model_used": prediction.model_used,
-                    "prediction_created_at": prediction.created_at,
-                }
-                if prediction.id is not None else None
-            ),
         }
-        for transaction, customer, prediction in rows
-    ]
+        result["fraud_prediction"] = (
+            {
+                "fraud_probability": fraud_probability,
+                "risk_level": risk_level,
+                "decision": decision,
+                "model_used": model_used,
+                "prediction_created_at": prediction_created_at,
+            }
+            if prediction_id is not None else None
+        )
+        results.append(result)
+    return results
+
+
+@app.get("/api/admin/transactions/{transaction_id}/explanation")
+def get_admin_transaction_explanation(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+):
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    prediction = db.query(FraudPrediction).filter(
+        FraudPrediction.transaction_id == transaction.id
+    ).order_by(FraudPrediction.created_at.desc(), FraudPrediction.id.desc()).first()
+    if prediction is None:
+        raise HTTPException(status_code=404, detail="No fraud prediction is recorded for this transaction")
+    return build_prediction_explanation(transaction, prediction)
 
 
 def serialize_review_transaction(transaction, customer, prediction):

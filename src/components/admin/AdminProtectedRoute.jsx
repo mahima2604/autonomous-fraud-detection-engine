@@ -8,7 +8,7 @@ function AdminProtectedRoute({ children }) {
 
   if (loading) return <LoadingSpinner label="Checking your session…" />;
   if (role === 'user') return <Navigate to="/dashboard" replace />;
-  if (role !== 'admin') return <Navigate to="/login?role=admin" replace />;
+  if (role !== 'admin') return <Navigate to="/admin/login" replace />;
 
   return children;
 }

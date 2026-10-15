@@ -7,19 +7,31 @@
  * creation. Keeps a clear line between what the frontend can supply
  * and what only the backend can generate.
  */
-export function buildTransactionPayload({ user, amount }) {
+export function buildTransactionPayload({ user, amount, items = [], paymentMethod, shippingAddress, billingAddress }) {
   return {
     TransactionAmt: amount,
-    // Checkout has no defensible mapping to the IEEE-CIS ProductCD feature.
-    // The saved baseline pipeline imputes this missing value and ignores UNKNOWN.
-    ProductCD: null,
-    
     // Extract domain from user if possible
     P_emaildomain: user?.email ? user.email.split('@')[1] : 'UNKNOWN',
     
     // Device info can be legitimately collected from navigator
     DeviceType: /Mobi|Android/i.test(navigator.userAgent) ? "mobile" : "desktop",
-    DeviceInfo: navigator.platform
+    DeviceInfo: navigator.platform,
+    checkout_snapshot: {
+      items: items.map((item) => ({ product_id: item.id, quantity: item.quantity })),
+      payment_method: paymentMethod,
+      shipping_address: toBackendAddress(shippingAddress),
+      billing_address: toBackendAddress(billingAddress),
+    },
+  };
+}
+
+function toBackendAddress(address = {}) {
+  return {
+    full_name: address.fullName,
+    line1: address.line1,
+    city: address.city,
+    postal_code: address.postalCode,
+    country: address.country,
   };
 }
 
@@ -32,17 +44,23 @@ function createCheckoutAttemptId() {
 
 export function savePendingCheckout(data) {
   const pending = { ...data, attemptId: data.attemptId || createCheckoutAttemptId() };
-  sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+  localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
 }
 
-export function getPendingCheckout() {
+export function getPendingCheckout(currentUserId) {
   try {
-    const pending = JSON.parse(sessionStorage.getItem(PENDING_KEY));
+    const pending = JSON.parse(localStorage.getItem(PENDING_KEY) || sessionStorage.getItem(PENDING_KEY));
     if (!pending) return null;
+
+    if (currentUserId && String(pending.userId) !== String(currentUserId)) {
+      localStorage.removeItem(PENDING_KEY);
+      sessionStorage.removeItem(PENDING_KEY);
+      return null;
+    }
 
     if (!pending.attemptId) {
       pending.attemptId = createCheckoutAttemptId();
-      sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+      localStorage.setItem(PENDING_KEY, JSON.stringify(pending));
     }
     return pending;
   } catch {
@@ -51,5 +69,6 @@ export function getPendingCheckout() {
 }
 
 export function clearPendingCheckout() {
+  localStorage.removeItem(PENDING_KEY);
   sessionStorage.removeItem(PENDING_KEY);
 }

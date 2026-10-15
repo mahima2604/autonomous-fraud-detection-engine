@@ -9,11 +9,13 @@ import { useCart } from '../context/CartContext';
 import OrderSummary from '../components/checkout/OrderSummary';
 import EmptyState from '../components/common/EmptyState';
 import { formatCurrency } from '../utils/formatters';
+import { useAuth } from '../context/AuthContext';
 
 function Payment() {
   const navigate = useNavigate();
   const { clearCart } = useCart();
-  const pending = getPendingCheckout();
+  const { user } = useAuth();
+  const pending = getPendingCheckout(user?.id);
 
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState('');

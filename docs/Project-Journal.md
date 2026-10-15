@@ -105,3 +105,38 @@ VITE_USE_MOCKS=true
   confirm how the backend wants to derive/receive these.
 - Admin dashboard summary/recent-transactions endpoints don't exist yet in
   the documented contract — need to be defined with the backend team.
+
+
+
+
+Session — Backend Workspace Setup
+
+Objective
+
+To create a separate backend workspace inside the existing project and prepare the Python environment for FastAPI development.
+
+What I Did
+
+Identified the correct project root containing the working React frontend.
+Created a separate backend folder.
+Created a Python virtual environment inside the backend.
+Activated the virtual environment for backend development.
+
+What I Learned
+
+The React frontend and Python backend can be maintained as separate parts of the same project.
+The Python virtual environment isolates the backend dependencies from other Python projects.
+The backend will later handle APIs, transaction processing, fraud detection, GNN inference, and database communication.
+
+Current Status
+
+✅ Claude frontend working
+✅ Correct project folder identified
+✅ Backend folder created
+✅ Python virtual environment prepared
+⏳ FastAPI setup next 
+
+
+Authentication Flow – Mock Authentication
+
+The frontend authentication flow was tested during system integration and a 404 error was identified because the login and registration services were attempting to communicate with authentication endpoints that had not yet been implemented in the FastAPI backend. Since authentication is not the current focus of the fraud detection engine, the authentication layer was separated from the backend and implemented as frontend mock authentication using browser storage. Registration stores the test user's information locally, while login validates the entered credentials against the stored information and maintains the authentication state through the existing React authentication context. This allowed the protected e-commerce pages and checkout workflow to be tested without affecting the real FastAPI fraud detection API.

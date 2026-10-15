@@ -23,12 +23,18 @@ import Orders from '../pages/Orders';
 import UserDashboard from '../pages/Dashboard';
 import FraudDashboard from '../pages/admin/FraudDashboard';
 import AdminCustomers from '../pages/admin/AdminCustomers';
-import AdminTransactions from '../pages/admin/AdminTransactions';
+import AdminCustomerDetailPage from '../pages/admin/AdminCustomerDetailPage';
+import AdminTransactions from '../pages/admin/AdminTransactionsPage';
+import AdminExplanationPage from '../pages/admin/AdminExplanationPage';
+import AdminLogin from '../pages/admin/AdminLogin';
 import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
 
 function AppRoutes() {
   return (
     <Routes>
+      {/* Dedicated standalone security login for administrators */}
+      <Route path="/admin/login" element={<AdminLogin />} />
+
       {/* MainLayout wraps every customer-facing route below it. */}
       <Route path="/" element={<MainLayout />}>
         <Route index element={<Home />} />
@@ -51,7 +57,7 @@ function AppRoutes() {
       {/* Separate shell for the internal fraud-monitoring dashboard. */}
       <Route path="/admin" element={<AdminLayout />}>
         <Route index element={<Navigate to="/admin/dashboard" replace />} />
-        <Route path="login" element={<Navigate to="/login?role=admin" replace />} />
+        <Route path="login" element={<AdminLogin />} />
         <Route path="fraud-dashboard" element={<Navigate to="/admin/dashboard" replace />} />
         <Route path="dashboard" element={
           <AdminProtectedRoute>
@@ -63,9 +69,19 @@ function AppRoutes() {
             <AdminCustomers />
           </AdminProtectedRoute>
         } />
+        <Route path="customers/:id" element={
+          <AdminProtectedRoute>
+            <AdminCustomerDetailPage />
+          </AdminProtectedRoute>
+        } />
         <Route path="transactions" element={
           <AdminProtectedRoute>
             <AdminTransactions />
+          </AdminProtectedRoute>
+        } />
+        <Route path="transactions/:transactionId/explanation" element={
+          <AdminProtectedRoute>
+            <AdminExplanationPage />
           </AdminProtectedRoute>
         } />
       </Route>

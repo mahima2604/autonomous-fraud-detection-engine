@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 os.environ.setdefault("AUTH_TOKEN_SECRET", "test-only-signing-key-for-checkout-tests")
@@ -7,6 +8,7 @@ os.environ.setdefault("ENABLE_DEMO_ADMIN", "false")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
+import pandas as pd
 import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
@@ -22,6 +24,7 @@ from app.models.order import Order
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.auth import create_access_token, create_admin_access_token, hash_password
+from app.ml.baseline import train_baseline_logistic_regression
 
 
 class FixedProbabilityPipeline:
@@ -83,10 +86,10 @@ def make_user(db, email):
     return user
 
 
-def run_prediction(db, user, monkeypatch, score, attempt_id=None):
+def run_prediction(db, user, monkeypatch, score, attempt_id=None, checkout_snapshot=None):
     monkeypatch.setattr(main, "baseline_pipeline", FixedProbabilityPipeline(score))
     monkeypatch.setattr(main, "artifacts_loaded", True)
-    request = main.TransactionInput(TransactionAmt=129.0, ProductCD=None, checkout_attempt_id=attempt_id)
+    request = main.TransactionInput(TransactionAmt=129.0, ProductCD=None, checkout_attempt_id=attempt_id, checkout_snapshot=checkout_snapshot)
     return main.predict_fraud(request, db=db, current_user=user)
 
 
@@ -177,6 +180,39 @@ def test_approved_owned_transaction_creates_idempotent_order(database, monkeypat
     assert database.query(Order).count() == 1
     assert main.get_orders(db=database, current_user=user)[0]["id"] == first["id"]
     assert database.query(Transaction).one().status == "ORDERED"
+
+
+def test_backend_checkout_snapshot_survives_review_and_controls_resumed_order(database, monkeypatch):
+    user = make_user(database, "snapshot-review@example.test")
+    admin = Admin(email="snapshot-review-admin@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    snapshot_address = {"full_name": "Saved Buyer", "line1": "9 Saved Road", "city": "Saved City", "postal_code": "99999", "country": "Savedland"}
+    snapshot = {
+        "items": [{"product_id": "p1", "quantity": 1}],
+        "payment_method": "PAYPAL",
+        "shipping_address": snapshot_address,
+        "billing_address": snapshot_address,
+    }
+    prediction = run_prediction(database, user, monkeypatch, 0.5, "snapshot-review-attempt", snapshot)
+    transaction = database.query(Transaction).one()
+    assert transaction.checkout_snapshot == snapshot
+    assert transaction.transaction_data["ProductCD"] == "Audio"
+
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(), db=database, current_admin=admin)
+    status = main.get_transaction_status(prediction.transaction_id, db=database, current_user=user)
+    assert status["transaction_id"] == prediction.transaction_id
+    assert status["checkout_snapshot"] == snapshot
+
+    # The client retry may have stale details; persisted checkout data is authoritative.
+    stale_request = order_request(prediction.transaction_id)
+    order = main.create_order(stale_request, db=database, current_user=user)
+    retry = main.create_order(stale_request, db=database, current_user=user)
+    assert order["transaction_id"] == prediction.transaction_id
+    assert order["paymentMethod"] == "PAYPAL"
+    assert order["shipping_address"] == snapshot_address
+    assert retry["id"] == order["id"]
+    assert database.query(Order).count() == 1
 
 
 def test_review_and_block_decisions_cannot_create_orders(database, monkeypatch):
@@ -497,6 +533,181 @@ def test_order_schema_migration_fails_when_primary_key_is_missing(tmp_path):
             main._add_missing_order_columns(engine)
     finally:
         engine.dispose()
+
+
+def test_admin_transaction_history_and_fraud_monitoring_are_distinct(database):
+    admin = Admin(email="monitoring-admin@example.test", hashed_password=hash_password("admin-test-password"))
+    customer = make_user(database, "monitoring-customer@example.test")
+    database.add(admin)
+    database.commit()
+    database.refresh(admin)
+
+    cases = [
+        ("APPROVED", None, 0.10, "LOW", "APPROVE"),
+        ("REVIEW", None, 0.50, "MEDIUM", "REVIEW"),
+        ("REVIEW_APPROVED", "APPROVE", 0.55, "MEDIUM", "REVIEW"),
+        ("REJECTED", "REJECT", 0.60, "MEDIUM", "REVIEW"),
+        ("BLOCKED", None, 0.90, "HIGH", "BLOCK"),
+    ]
+    created = []
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for index, (status, review_decision, score, risk, decision) in enumerate(cases):
+        transaction = Transaction(
+            user_id=customer.id,
+            amount=100 + index,
+            transaction_data={"TransactionAmt": 100 + index},
+            status=status,
+            review_decision=review_decision,
+            created_at=now - timedelta(minutes=index),
+        )
+        database.add(transaction)
+        database.flush()
+        prediction = FraudPrediction(
+            transaction_id=transaction.id,
+            fraud_probability=score,
+            risk_level=risk,
+            decision=decision,
+            model_used="LogisticRegression_Baseline",
+            created_at=now - timedelta(minutes=index),
+        )
+        database.add(prediction)
+        created.append((transaction, prediction))
+
+    unscored_transaction = Transaction(
+        user_id=customer.id,
+        amount=85.0,
+        transaction_data={"TransactionAmt": 85.0},
+        status="PENDING",
+        created_at=now + timedelta(minutes=2),
+    )
+    database.add(unscored_transaction)
+    database.flush()
+    database.add(Order(
+        user_id=customer.id,
+        transaction_id=created[0][0].id,
+        items=[],
+        shipping_address={},
+        billing_address={},
+        amount=100.0,
+        currency="USD",
+        status="PROCESSING",
+        payment_status="SIMULATED",
+        payment_method="CARD",
+    ))
+
+    # Multiple persisted assessments for one transaction must still render once,
+    # with the latest model outcome selected by timestamp and id.
+    database.add(FraudPrediction(
+        transaction_id=created[1][0].id,
+        fraud_probability=0.52,
+        risk_level="MEDIUM",
+        decision="REVIEW",
+        model_used="LogisticRegression_Baseline",
+        created_at=now + timedelta(minutes=1),
+    ))
+    database.commit()
+
+    history = main.get_admin_transactions(db=database, current_admin=admin)
+    monitoring = main.get_recent_predictions(limit=100, db=database, current_admin=admin)
+
+    assert len(history) == len(cases) + 1
+    assert len({row["transaction_id"] for row in history}) == len(cases) + 1
+    assert next(row for row in history if row["transaction_id"] == created[1][0].id)["fraud_prediction"]["fraud_probability"] == 0.52
+    assert next(row for row in history if row["transaction_id"] == unscored_transaction.id)["fraud_prediction"] is None
+    assert next(row for row in history if row["transaction_id"] == created[0][0].id)["order_id"] is not None
+    assert {row["decision"] for row in monitoring} == {"REVIEW", "BLOCK"}
+    assert {row["transaction_id"] for row in monitoring} == {created[index][0].id for index in (1, 2, 3, 4)}
+    assert all(row["status"] != "APPROVED" for row in monitoring)
+
+
+def test_admin_prediction_explanation_uses_fitted_pipeline_features(database, monkeypatch):
+    admin = Admin(email="explanation-admin@example.test", hashed_password=hash_password("admin-test-password"))
+    customer = make_user(database, "explanation-customer@example.test")
+    database.add(admin)
+    database.commit()
+    database.refresh(admin)
+
+    feature_names = ["TransactionAmt", "ProductCD", "P_emaildomain", "DeviceType", "DeviceInfo"]
+    training = pd.DataFrame([
+        [25.0, "W", "mail-a.test", "mobile", "phone-a"],
+        [35.0, "W", "mail-a.test", "mobile", "phone-b"],
+        [45.0, "H", "mail-b.test", "desktop", "computer-a"],
+        [55.0, "H", "mail-b.test", "desktop", "computer-b"],
+        [65.0, "C", "mail-c.test", "mobile", "phone-a"],
+        [75.0, "C", "mail-c.test", "mobile", "phone-b"],
+        [85.0, "R", "mail-d.test", "desktop", "computer-a"],
+        [95.0, "R", "mail-d.test", "desktop", "computer-b"],
+    ], columns=feature_names)
+    labels = np.array([0, 0, 0, 1, 0, 1, 1, 1])
+    fitted_pipeline = train_baseline_logistic_regression(
+        training, labels, ["TransactionAmt"], feature_names[1:]
+    )
+    monkeypatch.setattr(main, "baseline_pipeline", fitted_pipeline)
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+
+    actual_features = {
+        "TransactionAmt": 72.0,
+        "ProductCD": "C",
+        "P_emaildomain": "mail-c.test",
+        "DeviceType": "mobile",
+        "DeviceInfo": "phone-a",
+    }
+    score = float(fitted_pipeline.predict_proba(pd.DataFrame([actual_features]))[0, 1])
+    risk, decision = main.classify_fraud_score(score)
+    transaction = Transaction(
+        user_id=customer.id,
+        amount=72.0,
+        transaction_data=actual_features,
+        status="REVIEW" if decision == "REVIEW" else "APPROVED",
+        review_decision=None,
+    )
+    database.add(transaction)
+    database.flush()
+    prediction = FraudPrediction(
+        transaction_id=transaction.id,
+        fraud_probability=round(score, 4),
+        risk_level=risk,
+        decision=decision,
+        model_used="LogisticRegression_Baseline",
+    )
+    database.add(prediction)
+    database.commit()
+
+    explanation = main.get_admin_transaction_explanation(
+        transaction.id, db=database, current_admin=admin
+    )
+
+    assert explanation["transaction_id"] == transaction.id
+    assert explanation["model_name"] == "LogisticRegression_Baseline"
+    assert explanation["model_version"] is None
+    assert explanation["risk_score"] == round(score, 4)
+    assert explanation["risk_category"] == risk
+    assert explanation["model_decision"] == decision
+    assert {feature["name"] for feature in explanation["features"]} == set(feature_names)
+    assert explanation["attribution_available"] is True
+    assert len(explanation["feature_contributions"]) == len(feature_names)
+    assert np.isclose(
+        explanation["baseline_log_odds"] + sum(item["contribution_log_odds"] for item in explanation["feature_contributions"]),
+        explanation["model_log_odds"],
+        atol=1e-5,
+    )
+    assert "card1" not in {feature["name"] for feature in explanation["features"]}
+    assert explanation["review"]["decision"] is None
+
+
+def test_admin_monitoring_routes_require_admin_dependency():
+    protected_paths = {
+        "/api/admin/transactions",
+        "/api/admin/fraud/recent",
+        "/api/admin/transactions/{transaction_id}/explanation",
+    }
+    routes = {route.path: route for route in main.app.routes if route.path in protected_paths}
+
+    assert set(routes) == protected_paths
+    assert all(
+        any(dependency.call == main.get_current_admin for dependency in route.dependant.dependencies)
+        for route in routes.values()
+    )
 
 def test_catalog_and_order_routes_are_registered_without_admin_creation_route():
     paths = {(method, route.path) for route in main.app.routes for method in getattr(route, "methods", set())}

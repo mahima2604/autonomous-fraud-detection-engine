@@ -1,0 +1,86 @@
+/* AdminCustomerDetailPage.css
+   Dedicated layout and table styling for customer detail page */
+
+.admin-customer-detail-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+.admin-customer-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+.admin-profile-card,
+.admin-history-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+
+.admin-profile-card .card-header,
+.admin-history-card .card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-customer-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.profile-stat-box {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.profile-stat-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.profile-stat-value {
+  font-size: 14.5px;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.admin-cust-history-table {
+  min-width: 820px;
+}
+
+.admin-page-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+  gap: 16px;
+  color: #64748b;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .admin-customer-profile-grid {
+    grid-template-columns: 1fr;
+  }
+}

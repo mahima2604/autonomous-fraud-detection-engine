@@ -39,7 +39,7 @@ export function analyzeTransaction(transactionPayload, attemptId) {
   return trackedRequest;
 }
 
-export async function getRecentFraudPredictions(limit = 10000) {
+export async function getRecentFraudPredictions(limit = 100) {
   const response = await apiRequest(`/admin/fraud/recent?limit=${encodeURIComponent(limit)}`);
   return response.map((prediction) => ({
     ...prediction,

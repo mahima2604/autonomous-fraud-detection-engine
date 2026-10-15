@@ -1,61 +1,65 @@
-﻿// AuthContext.jsx
-// Global authentication state. Wraps mock login/register for now (see
-// services/authService.js) â€” the shape of `user` and `token` here is
-// designed to map directly onto whatever the real backend returns later.
+// AuthContext.jsx
+// Global authentication state. Wraps login/register and restores session
+// immediately from localStorage on startup.
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useState } from 'react';
 import * as authService from '../services/authService';
 
 const AuthContext = createContext(null);
 const ROLE_KEY = 'auth_role';
 
-export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
-  const [role, setRole] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
+function getInitialAuthState() {
+  try {
     const storedUser = localStorage.getItem('auth_user');
     const storedToken = localStorage.getItem('auth_token');
-
     const storedRole = localStorage.getItem(ROLE_KEY);
     localStorage.removeItem('admin_authenticated');
 
-    if (storedUser && storedToken && !storedToken.startsWith("mock-token-")) {
-      try {
-        const parsedUser = JSON.parse(storedUser);
-        setUser(parsedUser);
-        const restoredRole = storedRole === 'admin' ? 'admin' : 'user';
-        setRole(restoredRole);
-        localStorage.setItem(ROLE_KEY, restoredRole);
-      } catch {
-        authService.logout();
-        localStorage.removeItem(ROLE_KEY);
-      }
-    } else if (storedToken?.startsWith("mock-token-")) {
+    if (storedUser && storedToken && !storedToken.startsWith('mock-token-')) {
+      const parsedUser = JSON.parse(storedUser);
+      const restoredRole = storedRole === 'admin' ? 'admin' : 'user';
+      return { user: parsedUser, role: restoredRole };
+    } else if (storedToken?.startsWith('mock-token-')) {
       authService.logout();
       localStorage.removeItem(ROLE_KEY);
     }
-    setLoading(false);
-  }, []);
+  } catch {
+    authService.logout();
+    localStorage.removeItem(ROLE_KEY);
+  }
+  return { user: null, role: null };
+}
+
+export function AuthProvider({ children }) {
+  const [authState, setAuthState] = useState(getInitialAuthState);
+  const [loading, setLoading] = useState(false);
+
+  const user = authState.user;
+  const role = authState.role;
 
   async function login(credentials) {
+    localStorage.removeItem('cart_items_guest');
+    localStorage.removeItem('cart_items');
+    sessionStorage.removeItem('last_order');
+
     const { token, user: loggedInUser } = await authService.login(credentials);
     localStorage.setItem(ROLE_KEY, 'user');
     localStorage.setItem('auth_token', token);
     localStorage.setItem('auth_user', JSON.stringify(loggedInUser));
-    setUser(loggedInUser);
-    setRole('user');
+    setAuthState({ user: loggedInUser, role: 'user' });
     return loggedInUser;
   }
 
   async function register(details) {
+    localStorage.removeItem('cart_items_guest');
+    localStorage.removeItem('cart_items');
+    sessionStorage.removeItem('last_order');
+
     const { token, user: newUser } = await authService.register(details);
     localStorage.setItem(ROLE_KEY, 'user');
     localStorage.setItem('auth_token', token);
     localStorage.setItem('auth_user', JSON.stringify(newUser));
-    setUser(newUser);
-    setRole('user');
+    setAuthState({ user: newUser, role: 'user' });
     return newUser;
   }
 
@@ -65,16 +69,17 @@ export function AuthProvider({ children }) {
     localStorage.setItem(ROLE_KEY, 'admin');
     localStorage.setItem('auth_token', token);
     localStorage.setItem('auth_user', JSON.stringify(adminUser));
-    setUser(adminUser);
-    setRole('admin');
+    setAuthState({ user: adminUser, role: 'admin' });
     return adminUser;
   }
 
   function logout() {
     authService.logout();
     localStorage.removeItem(ROLE_KEY);
-    setUser(null);
-    setRole(null);
+    localStorage.removeItem('cart_items_guest');
+    localStorage.removeItem('cart_items');
+    sessionStorage.removeItem('last_order');
+    setAuthState({ user: null, role: null });
   }
 
   const value = {

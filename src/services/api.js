@@ -22,9 +22,11 @@ export async function apiRequest(path, options = {}) {
 
   const token = localStorage.getItem('auth_token');
 
+  const method = (rest.method || 'GET').toUpperCase();
+  const url = `${API_BASE_URL}${path}`;
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(url, {
       ...rest,
       headers: {
         'Content-Type': 'application/json',
@@ -33,7 +35,13 @@ export async function apiRequest(path, options = {}) {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
-  } catch {
+  } catch (error) {
+    console.error('[apiRequest] Fetch/network failure', {
+      method,
+      url,
+      errorName: error?.name || 'Error',
+      message: error?.message || 'Request failed before a response was received',
+    });
     throw new ApiError('Unable to reach the server. Please try again.', 0, null);
   }
 
@@ -49,6 +57,7 @@ export async function apiRequest(path, options = {}) {
 
   if (!response.ok) {
     const message = (data && data.detail) || (data && data.message) || `Request failed with status ${response.status}`;
+    console.warn('[apiRequest] HTTP error response', { method, url, status: response.status, message });
     throw new ApiError(message, response.status, data);
   }
 

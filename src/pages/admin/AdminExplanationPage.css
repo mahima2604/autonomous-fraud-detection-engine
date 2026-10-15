@@ -1,0 +1,44 @@
+/* AdminExplanationPage.css
+   Dedicated layout and back-navigation styling for prediction explanations */
+
+.admin-explanation-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+}
+
+.admin-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-brand, #2563eb);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.admin-back-btn:hover {
+  color: #1d4ed8;
+  text-decoration: underline;
+}
+
+.admin-kicker-separator {
+  color: #cbd5e1;
+  font-weight: 400;
+  margin: 0 4px;
+}
+
+.admin-explanation-page-body {
+  width: 100%;
+}
+
+.admin-explanation-page-body .prediction-explanation-card {
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05), 0 1px 2px rgba(15, 23, 42, 0.02);
+}

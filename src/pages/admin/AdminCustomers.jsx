@@ -1,20 +1,18 @@
+// AdminCustomers.jsx
+// Enterprise Customer Directory & Individual Fraud Profile View.
+
 import { useEffect, useMemo, useState } from 'react';
-import { getCustomerDetails, getCustomers } from '../../services/adminCustomerService';
-import RiskBadge from '../../components/fraud/RiskBadge';
-import { formatCurrency, formatDate, formatDateTime } from '../../utils/formatters';
+import { useNavigate } from 'react-router-dom';
+import { getCustomers } from '../../services/adminCustomerService';
+import { formatDate } from '../../utils/formatters';
 import './AdminCustomers.css';
 
-const DECISION_CLASS = { APPROVE: 'badge-low', REVIEW: 'badge-medium', BLOCK: 'badge-high' };
-
 function AdminCustomers() {
+  const navigate = useNavigate();
   const [customers, setCustomers] = useState([]);
   const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState(null);
-  const [details, setDetails] = useState(null);
   const [listLoading, setListLoading] = useState(true);
-  const [detailsLoading, setDetailsLoading] = useState(false);
   const [listError, setListError] = useState(false);
-  const [detailsError, setDetailsError] = useState(false);
 
   const loadCustomers = async () => {
     setListLoading(true);
@@ -29,91 +27,183 @@ function AdminCustomers() {
     }
   };
 
-  const loadDetails = async (customerId) => {
-    setSelectedId(customerId);
-    setDetails(null);
-    setDetailsLoading(true);
-    setDetailsError(false);
-    try {
-      setDetails(await getCustomerDetails(customerId));
-    } catch {
-      setDetailsError(true);
-    } finally {
-      setDetailsLoading(false);
-    }
-  };
-
-  useEffect(() => { loadCustomers(); }, []);
+  useEffect(() => {
+    loadCustomers();
+  }, []);
 
   const filteredCustomers = useMemo(() => {
     const search = query.trim().toLowerCase();
     if (!search) return customers;
-    return customers.filter((customer) =>
-      (customer.name || '').toLowerCase().includes(search) || customer.email.toLowerCase().includes(search),
+    return customers.filter(
+      (customer) =>
+        (customer.name || '').toLowerCase().includes(search) ||
+        customer.email.toLowerCase().includes(search) ||
+        String(customer.id).includes(search),
     );
   }, [customers, query]);
 
   return (
     <section className="admin-customers">
-      <div className="admin-customers-heading">
-        <div><p className="admin-eyebrow">Account management</p><h1>Customers</h1></div>
-        <button className="btn btn-secondary" onClick={loadCustomers} disabled={listLoading}>Refresh</button>
+      {/* Page Header */}
+      <div className="admin-page-header">
+        <div className="admin-header-title-group">
+          <div className="admin-header-kicker">
+            <span className="admin-kicker-dot" />
+            <span>Customer Directory</span>
+          </div>
+          <h1 className="admin-page-title">Customer Accounts & Risk Profiles</h1>
+          <p className="admin-page-subtitle">
+            Registered customer accounts, activity histories, and correlated fraud scoring assessments.
+          </p>
+        </div>
+        <div className="admin-header-actions">
+          <button
+            id="admin-customers-refresh-btn"
+            className="btn btn-secondary admin-refresh-btn"
+            onClick={loadCustomers}
+            disabled={listLoading}
+            title="Refresh customer accounts"
+          >
+            <svg
+              className={`admin-refresh-icon ${listLoading ? 'spinning' : ''}`}
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+            </svg>
+            <span>{listLoading ? 'Refreshing...' : 'Refresh'}</span>
+          </button>
+        </div>
       </div>
 
-      <div className="card admin-customer-list">
-        <div className="admin-customer-toolbar">
-          <div><h2>Customer accounts</h2><p>Registered accounts from SecureCart.</p></div>
-          <label className="admin-search">
-            <span className="sr-only">Search customers by name or email</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name or email" />
-          </label>
+      {/* Main Customers List Card */}
+      <div className="card admin-table-card">
+        <div className="admin-table-toolbar">
+          <div className="admin-toolbar-title-wrap">
+            <h2 className="admin-card-title">Registered Accounts</h2>
+            <p className="admin-card-description">
+              Showing {filteredCustomers.length} of {customers.length} verified customer accounts.
+            </p>
+          </div>
+          <div className="admin-toolbar-controls">
+            <div className="admin-search-wrapper">
+              <svg className="admin-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input
+                id="admin-customers-search"
+                type="text"
+                className="admin-input admin-search-input"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search by name, email, or user ID..."
+              />
+              {query && (
+                <button
+                  type="button"
+                  className="admin-search-clear"
+                  onClick={() => setQuery('')}
+                  title="Clear search"
+                >
+                  &times;
+                </button>
+              )}
+            </div>
+          </div>
         </div>
-        {listLoading ? <p className="admin-state">Loading customers...</p> : listError ? (
-          <div className="admin-state admin-state-error"><p>Unable to load customer data.</p><button className="btn btn-secondary btn-sm" onClick={loadCustomers}>Retry</button></div>
-        ) : customers.length === 0 ? <p className="admin-state">No customers registered yet.</p> : filteredCustomers.length === 0 ? (
-          <p className="admin-state">No customers match your search.</p>
+
+        {listLoading ? (
+          <div className="admin-table-state">
+            <div className="spinner spinner-dark" />
+            <p>Loading registered customers...</p>
+          </div>
+        ) : listError ? (
+          <div className="admin-table-state admin-table-error">
+            <p>Unable to retrieve customer directory.</p>
+            <button className="btn btn-secondary btn-sm" onClick={loadCustomers}>
+              Retry
+            </button>
+          </div>
+        ) : customers.length === 0 ? (
+          <div className="admin-table-state">
+            <p>No customers registered yet in the system.</p>
+          </div>
+        ) : filteredCustomers.length === 0 ? (
+          <div className="admin-table-state">
+            <p>No customer accounts match your search query "{query}".</p>
+          </div>
         ) : (
-          <div className="table-scroll"><table className="data-table">
-            <thead><tr><th>Name</th><th>Email</th><th>User ID</th><th>Status</th><th>Registered</th><th>Action</th></tr></thead>
-            <tbody>{filteredCustomers.map((customer) => (
-              <tr key={customer.id}>
-                <td>{customer.name || '—'}</td><td>{customer.email}</td><td>{customer.id}</td>
-                <td><span className={`badge ${customer.is_active ? 'badge-low' : 'badge-neutral'}`}>{customer.is_active ? 'Active' : 'Inactive'}</span></td>
-                <td>{formatDate(customer.created_at)}</td>
-                <td><button className="btn-link" onClick={() => loadDetails(customer.id)}>View Details</button></td>
-              </tr>
-            ))}</tbody>
-          </table></div>
+          <div className="admin-table-scroll-container">
+            <table className="admin-table admin-customers-table">
+              <thead>
+                <tr>
+                  <th className="th-cust-name">Customer Name</th>
+                  <th className="th-cust-email">Email Address</th>
+                  <th className="th-cust-id">User ID</th>
+                  <th className="th-cust-status">Account Status</th>
+                  <th className="th-cust-date">Registration Date</th>
+                  <th className="th-cust-action">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredCustomers.map((customer) => {
+                  return (
+                    <tr key={customer.id}>
+                      <td className="td-cust-name">
+                        <div className="customer-avatar-row">
+                          <span className="customer-avatar-circle">
+                            {(customer.name || customer.email || 'U').charAt(0).toUpperCase()}
+                          </span>
+                          <strong className="customer-name-text">{customer.name || 'Name unavailable'}</strong>
+                        </div>
+                      </td>
+                      <td className="td-cust-email">
+                        <span className="customer-email-text">{customer.email}</span>
+                      </td>
+                      <td className="td-cust-id">
+                        <span className="admin-user-id-badge">USR-#{customer.id}</span>
+                      </td>
+                      <td className="td-cust-status">
+                        <span className={`badge ${customer.is_active ? 'badge-low' : 'badge-neutral'}`}>
+                          {customer.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="td-cust-date font-tabular">
+                        <span className="time-cell-text">{formatDate(customer.created_at)}</span>
+                      </td>
+                      <td className="td-cust-action">
+                        <button
+                          id={`btn-view-customer-${customer.id}`}
+                          type="button"
+                          className="btn-action-view"
+                          onClick={() => navigate(`/admin/customers/${customer.id}`)}
+                          title="View customer fraud profile on dedicated page"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                          <span>View Details &rarr;</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
-
-      {selectedId !== null && <section className="admin-customer-details" aria-live="polite">
-        <div className="admin-details-heading"><h2>Customer details</h2><button className="btn-link" onClick={() => { setSelectedId(null); setDetails(null); }}>Close</button></div>
-        {detailsLoading ? <p className="admin-state">Loading customer details...</p> : detailsError ? (
-          <div className="admin-state admin-state-error"><p>Unable to load customer data.</p><button className="btn btn-secondary btn-sm" onClick={() => loadDetails(selectedId)}>Retry</button></div>
-        ) : details && <>
-          <div className="card card-padded admin-customer-profile">
-            <div><span>Name</span><strong>{details.customer.name || '—'}</strong></div>
-            <div><span>Email</span><strong>{details.customer.email}</strong></div>
-            <div><span>User ID</span><strong>{details.customer.id}</strong></div>
-            <div><span>Account status</span><strong>{details.customer.is_active ? 'Active' : 'Inactive'}</strong></div>
-            <div><span>Registered</span><strong>{formatDate(details.customer.created_at)}</strong></div>
-          </div>
-          <div className="admin-transaction-heading"><h3>Customer transactions</h3></div>
-          <div className="card table-scroll"><table className="data-table">
-            <thead><tr><th>Transaction ID</th><th>Amount</th><th>Fraud Score</th><th>Risk</th><th>Decision</th><th>Model</th><th>Timestamp</th></tr></thead>
-            <tbody>{details.transactions.length === 0 ? <tr><td colSpan="7" className="admin-table-empty">No transactions found for this customer.</td></tr> : details.transactions.map((transaction) => {
-              const prediction = transaction.fraud_prediction;
-              return <tr key={transaction.transaction_id}>
-                <td>{transaction.transaction_id}</td><td>{formatCurrency(transaction.amount)}</td>
-                {prediction ? <><td>{prediction.fraud_probability}</td><td><RiskBadge riskLevel={prediction.risk_level} /></td><td><span className={`badge ${DECISION_CLASS[prediction.decision] || 'badge-neutral'}`}>{prediction.decision}</span></td><td>{prediction.model_used || '—'}</td><td>{formatDateTime(prediction.created_at)}</td></> : <td colSpan="5" className="admin-prediction-missing">No fraud prediction available. <span className="admin-transaction-date">Transaction: {formatDateTime(transaction.created_at)}</span></td>}
-              </tr>;
-            })}</tbody>
-          </table></div>
-        </>}
-      </section>}
     </section>
   );
 }
 
 export default AdminCustomers;
+

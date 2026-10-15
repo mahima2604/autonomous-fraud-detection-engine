@@ -1,32 +1,169 @@
-.admin-login-container {
+/* AdminLogin.css
+   Dedicated, high-security aesthetic for SecureCart Administrative Console */
+
+.admin-login-page {
+  min-height: 100vh;
   display: flex;
-  justify-content: center;
   align-items: center;
-  min-height: calc(100vh - 120px);
-  padding: 20px;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 20%, #1e293b 0%, #0f172a 100%);
+  padding: 32px 16px;
+  box-sizing: border-box;
+  font-family: var(--font-sans);
+}
+
+.admin-login-container {
+  width: 100%;
+  max-width: 460px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.admin-login-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px;
+}
+
+.admin-back-store-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.admin-back-store-link:hover {
+  color: #ffffff;
+}
+
+.admin-security-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  padding: 4px 9px;
+  border-radius: 999px;
+}
+
+.admin-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.4);
 }
 
 .admin-login-card {
-  width: 100%;
-  max-width: 400px;
-  padding: 32px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  background: #ffffff;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  padding: 32px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
-.admin-login-title {
-  margin: 0 0 8px;
-  font-size: 24px;
-  text-align: center;
-  color: var(--color-primary);
+.admin-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 16px;
 }
 
-.admin-login-subtitle {
-  text-align: center;
-  color: var(--color-text-faint);
-  margin-bottom: 24px;
-  font-size: 14px;
+.admin-shield-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #1e3a8a 0%, #0f172a 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #38bdf8;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+  flex-shrink: 0;
+}
+
+.admin-brand-title {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.admin-brand-sub {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.admin-login-header h2 {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+  margin: 0 0 4px;
+  letter-spacing: -0.02em;
+}
+
+.admin-login-header p {
+  font-size: 13.5px;
+  color: #64748b;
+  margin: 0;
+}
+
+.admin-security-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #2563eb;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.4;
+}
+
+.admin-security-notice svg {
+  flex-shrink: 0;
+  color: #2563eb;
+  margin-top: 1px;
+}
+
+.admin-login-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.admin-login-error svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .admin-login-form {
@@ -35,17 +172,118 @@
   gap: 16px;
 }
 
-.admin-login-btn {
-  margin-top: 8px;
-  width: 100%;
+.input-with-icon {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
 
-.admin-login-error {
-  background: #fdeaea;
-  color: var(--color-danger);
-  padding: 12px;
-  border-radius: 4px;
-  margin-bottom: 20px;
+.input-with-icon .field-icon {
+  position: absolute;
+  left: 12px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.input-with-icon input {
+  padding-left: 36px;
+  padding-right: 38px;
+  height: 42px;
+  border-radius: 6px;
   font-size: 14px;
-  text-align: center;
+  border: 1px solid #cbd5e1;
+  width: 100%;
+  box-sizing: border-box;
+  background: #ffffff;
+  color: #0f172a;
+  transition: all 0.15s ease;
+}
+
+.input-with-icon input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.btn-toggle-password {
+  position: absolute;
+  right: 10px;
+  background: none;
+  border: none;
+  padding: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.btn-toggle-password:hover {
+  color: #475569;
+}
+
+.btn-admin-submit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 44px;
+  background: #0f172a;
+  color: #ffffff;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  font-size: 14.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25);
+  margin-top: 4px;
+}
+
+.btn-admin-submit:hover:not(:disabled) {
+  background: #1e293b;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.35);
+}
+
+.btn-admin-submit:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.spinner-white {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.admin-login-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 14px;
+  border-top: 1px solid #f1f5f9;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.admin-customer-login-link {
+  color: #2563eb;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.admin-customer-login-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 480px) {
+  .admin-login-card {
+    padding: 24px 18px;
+  }
 }

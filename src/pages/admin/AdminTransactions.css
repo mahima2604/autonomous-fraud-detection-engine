@@ -1,24 +1,374 @@
-.admin-transactions { display: grid; gap: 24px; }
-.admin-review-card { overflow: hidden; }
-.admin-review-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 22px 24px; }
-.admin-review-heading h2 { margin: 0; font-size: 19px; }
-.admin-review-heading p { margin: 4px 0 0; font-size: 13px; }
-.admin-review-feedback { margin: 0 24px 12px; padding: 10px 12px; border-radius: var(--radius-sm); }
-.admin-review-feedback-success { color: var(--color-success); background: rgba(16, 185, 129, 0.1); }
-.admin-review-feedback-error { color: var(--color-danger); background: rgba(239, 68, 68, 0.1); }
-.admin-review-customer { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }
-.admin-review-customer small { color: var(--color-text-faint); overflow-wrap: anywhere; }
-.admin-review-actions { display: flex; gap: 8px; }
-.admin-transactions-heading, .admin-transactions-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.admin-transactions-card { overflow: hidden; }
-.admin-transactions-toolbar { padding: 22px 24px; }
-.admin-transactions-toolbar h2 { margin: 0; font-size: 19px; }
-.admin-transactions-toolbar p { margin: 4px 0 0; font-size: 13px; }
-.admin-transaction-controls { display: flex; gap: 10px; }
-.admin-transaction-search input, .admin-risk-filter select { min-height: 39px; padding: 9px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: #fff; }
-.admin-transaction-search input { width: min(280px, 38vw); }
-.admin-transactions-state { padding: 32px 20px; margin: 0; text-align: center; color: var(--color-text-muted); }
-.admin-transactions-error { display: flex; justify-content: center; align-items: center; gap: 12px; }
-.admin-transactions-error p { color: var(--color-danger); }
-@media (max-width: 760px) { .admin-review-heading, .admin-transactions-toolbar { align-items: flex-start; flex-direction: column; } .admin-transaction-controls { width: 100%; } .admin-transaction-search, .admin-transaction-search input { width: 100%; } }
-@media (max-width: 640px) { .admin-transactions-heading { align-items: flex-start; } .admin-transaction-controls { flex-direction: column; } .admin-risk-filter select { width: 100%; } }
+/* AdminTransactions.css
+   Polished SaaS layout & table styling for Transaction History & Reviews */
+
+.admin-transactions {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Feedback alert */
+.admin-alert-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-radius: 8px;
+  font-size: 13.5px;
+}
+
+.admin-alert-success {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+}
+
+.admin-alert-danger {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.admin-alert-content {
+  flex: 1;
+}
+
+.btn-close-alert {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.7;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.btn-close-alert:hover {
+  opacity: 1;
+}
+
+/* Table Toolbar */
+.admin-title-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Table Scroll and Structure */
+.admin-table-scroll-container {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  direction: ltr;
+  position: relative;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+  -webkit-overflow-scrolling: touch;
+}
+
+.admin-table-scroll-container::-webkit-scrollbar {
+  height: 8px;
+}
+
+.admin-table-scroll-container::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.admin-table-scroll-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.admin-table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.admin-transactions-table {
+  width: 100%;
+  min-width: 1220px; /* Contained within horizontal scroll container */
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.admin-transactions-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.admin-transactions-table th:first-child,
+.admin-transactions-table td:first-child {
+  padding-left: 20px;
+}
+
+.admin-transactions-table th:last-child,
+.admin-transactions-table td:last-child {
+  padding-right: 20px;
+}
+
+.admin-transactions-table td {
+  padding: 12px 12px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: #1e293b;
+}
+
+.admin-transactions-table tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.admin-transactions-table tbody tr.row-pending-review {
+  background-color: #fffdf5;
+}
+
+.admin-transactions-table tbody tr.row-pending-review:hover {
+  background-color: #fffbeb;
+}
+
+.admin-transactions-table tbody tr.row-selected {
+  background-color: #eff6ff;
+}
+
+/* Specific column styles */
+.th-txid, .td-txid { width: 115px; }
+.th-date, .td-date { width: 140px; }
+.th-amount, .td-amount { width: 90px; }
+.th-customer, .td-customer { width: 160px; }
+.th-status, .td-status { width: 135px; }
+.th-review, .td-review { width: 135px; }
+.th-score, .td-score { width: 85px; }
+.th-risk, .td-risk { width: 115px; }
+.th-decision, .td-decision { width: 105px; }
+.th-actions, .td-actions { width: 235px; text-align: right; }
+
+.admin-transactions-table {
+  width: 100%;
+  min-width: 1325px; /* Predictable width ensuring no column squishing or overlap */
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+/* Compact status badges for transaction table */
+.admin-transactions-table .badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.customer-order {
+  font-size: 11.5px;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.review-status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reviewed-timestamp {
+  font-size: 11px;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Actions inside rows */
+.admin-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.admin-review-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-review-approve {
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: #059669;
+  color: #ffffff;
+  border: 1px solid #047857;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-review-approve:hover:not(:disabled) {
+  background: #047857;
+}
+
+.btn-review-reject {
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #dc2626;
+  border: 1px solid #f87171;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.btn-review-reject:hover:not(:disabled) {
+  background: #fef2f2;
+  border-color: #dc2626;
+}
+
+.btn-review-approve:disabled,
+.btn-review-reject:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Dedicated Explain Button */
+.btn-action-explain {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-action-explain:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.btn-action-explain.active {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+}
+
+/* ===================================================================
+   Prediction Explanation Full-Width Panel (Outside table scroll)
+   =================================================================== */
+.admin-explanation-wrapper {
+  width: 100%;
+  box-sizing: border-box;
+  background: #f8fafc;
+  border-top: 2px solid #e2e8f0;
+  padding: 24px;
+}
+
+.admin-explanation-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.explanation-header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.explanation-badge {
+  padding: 3px 8px;
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.explanation-header-title h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.btn-close-explanation {
+  background: none;
+  border: 1px solid #cbd5e1;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-close-explanation:hover {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.admin-table-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  color: #64748b;
+  gap: 12px;
+}
+
+.admin-table-error p {
+  color: #dc2626;
+  margin: 0;
+}
+
+/* Responsive Breakpoints */
+@media (max-width: 768px) {
+  .admin-explanation-wrapper {
+    padding: 16px;
+  }
+
+  .admin-explanation-header-bar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}

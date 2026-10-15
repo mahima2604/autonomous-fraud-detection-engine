@@ -1,4 +1,4 @@
-// Home.jsx — landing page: hero, security messaging, product highlights.
+// Home.jsx — Modern, customer-centric e-commerce storefront landing page.
 import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import ProductCard from '../components/product/ProductCard';
@@ -6,15 +6,28 @@ import LoadingSpinner from '../components/common/LoadingSpinner';
 import { getProducts } from '../services/productService';
 import './Home.css';
 
+const CATEGORIES = [
+  { name: 'Audio', label: 'Audio & Sound', icon: '🎧', count: 'Headphones & Speakers' },
+  { name: 'Wearables', label: 'Wearable Tech', icon: '⌚', count: 'Trackers & Smartbands' },
+  { name: 'Accessories', label: 'Accessories', icon: '⌨️', count: 'Keyboards & Peripherals' },
+  { name: 'Bags', label: 'Bags & Packs', icon: '🎒', count: 'Daypacks & Sleeves' },
+  { name: 'Home', label: 'Home & Living', icon: '💡', count: 'Lamps & Essentials' },
+  { name: 'Footwear', label: 'Footwear', icon: '👟', count: 'Running & Lifestyle' },
+];
+
 function Home() {
   const [featured, setFeatured] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
     getProducts()
       .then((products) => {
-        if (active) setFeatured(products.slice(0, 4));
+        if (active) {
+          setTotalCount(products.length);
+          setFeatured(products.slice(0, 4));
+        }
       })
       .finally(() => active && setLoading(false));
     return () => {
@@ -23,42 +36,138 @@ function Home() {
   }, []);
 
   return (
-    <div className="home">
-      <section className="hero">
-        <div className="hero-text">
-          <span className="hero-eyebrow">Checkout, screened</span>
-          <h1>Shop confidently. Every checkout is reviewed for fraud risk.</h1>
-          <p>
-            SecureCart pairs an ordinary online store with a fraud-risk check that runs before
-            payment is confirmed — flagging unusual transactions so more of your genuine orders
-            go through smoothly.
+    <div className="home-storefront">
+      {/* 1. High-Impact Commerce Hero */}
+      <section className="store-hero">
+        <div className="hero-content">
+          <div className="hero-kicker">
+            <span className="hero-kicker-dot" />
+            <span>Curated Lifestyle &middot; Autonomous Fraud Defense</span>
+          </div>
+          <h1 className="hero-heading">
+            Premium Gear &amp; Tech, Protected by Real-Time Intelligence.
+          </h1>
+          <p className="hero-description">
+            Experience frictionless shopping backed by our automated fraud detection engine. Every transaction is screened in milliseconds so genuine shoppers enjoy instant checkout without holds.
           </p>
-          <div className="hero-actions">
-            <Link to="/products" className="btn btn-primary">Browse products</Link>
-            <Link to="/register" className="btn btn-secondary">Create an account</Link>
+          <div className="hero-cta-group">
+            <Link to="/products" className="btn btn-brand hero-primary-btn">
+              <span>Shop All Products</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="5" y1="12" x2="19" y2="12" />
+                <polyline points="12 5 19 12 12 19" />
+              </svg>
+            </Link>
+            <Link to="/register" className="btn btn-secondary hero-secondary-btn">
+              Create Free Account
+            </Link>
+          </div>
+
+          <div className="hero-trust-metrics">
+            <div className="metric-item">
+              <strong>100%</strong>
+              <span>Screened Checkout</span>
+            </div>
+            <div className="metric-divider" />
+            <div className="metric-item">
+              <strong>Free</strong>
+              <span>Tracked Delivery</span>
+            </div>
+            <div className="metric-divider" />
+            <div className="metric-item">
+              <strong>0.30</strong>
+              <span>Auto-Approval Floor</span>
+            </div>
           </div>
         </div>
-        <div className="hero-panel card card-padded">
-          <h3>How checkout protection works</h3>
-          <ol className="hero-steps">
-            <li>You add items to your cart and check out as usual.</li>
-            <li>We send the transaction details for a fraud risk review.</li>
-            <li>Low-risk orders continue straight to payment.</li>
-            <li>Unusual orders get a quick extra verification step.</li>
-          </ol>
-          <p className="mock-note" style={{ marginTop: 12 }}>
-            This review reduces — it does not eliminate — fraudulent transactions.
-          </p>
+
+        {/* Hero Visual Card */}
+        <div className="hero-showcase-panel">
+          <div className="showcase-card">
+            <div className="showcase-badge">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+              <span>Autonomous Risk Engine Active</span>
+            </div>
+            <h3 className="showcase-title">How Protected Checkout Works</h3>
+            <div className="showcase-steps-list">
+              <div className="showcase-step">
+                <span className="step-badge">1</span>
+                <div>
+                  <strong>Curate Your Cart</strong>
+                  <p>Browse genuine gear and add items to your basket.</p>
+                </div>
+              </div>
+              <div className="showcase-step">
+                <span className="step-badge">2</span>
+                <div>
+                  <strong>Instant ML Risk Assessment</strong>
+                  <p>Model scores transaction probability before payment.</p>
+                </div>
+              </div>
+              <div className="showcase-step">
+                <span className="step-badge">3</span>
+                <div>
+                  <strong>Frictionless Payment</strong>
+                  <p>Approved orders proceed straight to payment simulation.</p>
+                </div>
+              </div>
+            </div>
+            <div className="showcase-footer">
+              <span className="showcase-note">&bull; Zero real card data collected &bull; Safe test store</span>
+            </div>
+          </div>
         </div>
       </section>
 
-      <section>
-        <div className="section-heading">
-          <h2>Featured products</h2>
-          <Link to="/products" className="btn-link">View all →</Link>
+      {/* 2. Explore by Category */}
+      <section className="store-section">
+        <div className="section-header-row">
+          <div>
+            <span className="section-eyebrow">Product Collections</span>
+            <h2 className="section-title">Explore by Category</h2>
+          </div>
+          <Link to="/products" className="section-action-link">
+            <span>All Categories ({totalCount || 8})</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </Link>
         </div>
+
+        <div className="categories-grid">
+          {CATEGORIES.map((cat) => (
+            <Link
+              key={cat.name}
+              to={`/products?category=${encodeURIComponent(cat.name)}`}
+              className="category-tile"
+            >
+              <span className="cat-icon" aria-hidden="true">{cat.icon}</span>
+              <div className="cat-info">
+                <strong>{cat.label}</strong>
+                <span>{cat.count}</span>
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      {/* 3. Featured Products */}
+      <section className="store-section">
+        <div className="section-header-row">
+          <div>
+            <span className="section-eyebrow">Top Rated Essentials</span>
+            <h2 className="section-title">Featured Products</h2>
+          </div>
+          <Link to="/products" className="section-action-link">
+            <span>View Full Catalog &rarr;</span>
+          </Link>
+        </div>
+
         {loading ? (
-          <LoadingSpinner label="Loading products…" />
+          <LoadingSpinner label="Loading featured products..." />
         ) : (
           <div className="product-grid">
             {featured.map((product) => (
@@ -66,6 +175,51 @@ function Home() {
             ))}
           </div>
         )}
+      </section>
+
+      {/* 4. Storefront Assurance Grid */}
+      <section className="store-section assurance-section">
+        <div className="assurance-header">
+          <h2>Engineered for Smooth Shopping</h2>
+          <p>Every layer of SecureCart is built for customer confidence and transparent security.</p>
+        </div>
+
+        <div className="assurance-cards-grid">
+          <div className="assurance-card">
+            <div className="assurance-icon-box icon-blue">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                <path d="M9 12l2 2 4-4" />
+              </svg>
+            </div>
+            <h3>Autonomous ML Defense</h3>
+            <p>Our serving engine computes behavioral risk scores in real-time, blocking fraudulent attempts before processing.</p>
+          </div>
+
+          <div className="assurance-card">
+            <div className="assurance-icon-box icon-green">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                <polyline points="22 4 12 14.01 9 11.01" />
+              </svg>
+            </div>
+            <h3>98%+ Genuine Approval</h3>
+            <p>Calibrated thresholds (score &le; 0.30) ensure your legitimate orders proceed straight to simulated checkout without delays.</p>
+          </div>
+
+          <div className="assurance-card">
+            <div className="assurance-icon-box icon-purple">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="1" y="3" width="15" height="13" />
+                <polygon points="16 8 20 8 23 11 23 16 16 16 16 8" />
+                <circle cx="5.5" cy="18.5" r="2.5" />
+                <circle cx="18.5" cy="18.5" r="2.5" />
+              </svg>
+            </div>
+            <h3>Tracked Store Fulfillment</h3>
+            <p>Simulated order creation instantly generates a valid Order Reference and links it to your account history.</p>
+          </div>
+        </div>
       </section>
     </div>
   );

@@ -87,6 +87,7 @@ def make_user(db, email):
 
 
 def run_prediction(db, user, monkeypatch, score, attempt_id=None, checkout_snapshot=None):
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
     monkeypatch.setattr(main, "baseline_pipeline", FixedProbabilityPipeline(score))
     monkeypatch.setattr(main, "artifacts_loaded", True)
     request = main.TransactionInput(TransactionAmt=129.0, ProductCD=None, checkout_attempt_id=attempt_id, checkout_snapshot=checkout_snapshot)
@@ -152,6 +153,7 @@ def test_failed_prediction_does_not_create_transaction(database, monkeypatch):
 
     monkeypatch.setattr(main, "baseline_pipeline", BrokenPipeline())
     monkeypatch.setattr(main, "artifacts_loaded", True)
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
     with pytest.raises(HTTPException) as error:
         main.predict_fraud(main.TransactionInput(TransactionAmt=129), db=database, current_user=user)
     assert error.value.status_code == 503
@@ -379,6 +381,7 @@ def test_admin_approved_review_creates_idempotent_357_50_order(database_with_leg
     user = make_user(database, "three-item-review@example.test")
     monkeypatch.setattr(main, "baseline_pipeline", FixedProbabilityPipeline(0.5))
     monkeypatch.setattr(main, "artifacts_loaded", True)
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
     prediction = main.predict_fraud(
         main.TransactionInput(TransactionAmt=357.5, checkout_attempt_id="three-item-review-attempt"),
         db=database,
@@ -644,6 +647,7 @@ def test_admin_prediction_explanation_uses_fitted_pipeline_features(database, mo
     )
     monkeypatch.setattr(main, "baseline_pipeline", fitted_pipeline)
     monkeypatch.setattr(main, "artifacts_loaded", True)
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
 
     actual_features = {
         "TransactionAmt": 72.0,

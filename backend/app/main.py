@@ -3,11 +3,13 @@ from pydantic import BaseModel, Field, validator
 from typing import List, Optional
 import joblib
 import logging
+import datetime
 from contextlib import asynccontextmanager
 import math
 import os
 import pandas as pd
 import sys
+import torch
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect, text, func, and_, or_
 
@@ -26,6 +28,9 @@ from app.services.auth import (
     hash_password, verify_password,
 )
 from app.cors import install_global_cors
+from app.ml.model import GraphSAGE
+from app.graph.graph_builder import build_homogeneous_transaction_graph
+from app.ml.preprocessing import select_features_and_preprocess
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +244,45 @@ except Exception:
     logger.exception("Failed to load the Logistic Regression baseline artifact")
     artifacts_loaded = False
 
+# The Logistic Regression model remains available as an explicit selection or
+# explicitly configured failure fallback. A broken GNN never falls back silently.
+PRIMARY_FRAUD_MODEL = os.getenv("FRAUD_PRIMARY_MODEL", "gnn").strip().lower()
+FALLBACK_FRAUD_MODEL = os.getenv("FRAUD_FALLBACK_MODEL", "").strip().lower()
+if PRIMARY_FRAUD_MODEL not in {"gnn", "logistic_regression"}:
+    raise RuntimeError("FRAUD_PRIMARY_MODEL must be gnn or logistic_regression")
+if FALLBACK_FRAUD_MODEL not in {"", "logistic_regression"}:
+    raise RuntimeError("FRAUD_FALLBACK_MODEL must be empty or logistic_regression")
+
+gnn_model = None
+gnn_artifacts_loaded = False
+gnn_metadata = None
+gnn_scalers = None
+gnn_encoders = None
+try:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    MODELS_DIR = os.path.join(BASE_DIR, "models")
+    import json
+    with open(os.path.join(MODELS_DIR, "graphsage_metadata.json"), encoding="utf-8") as metadata_file:
+        gnn_metadata = json.load(metadata_file)
+    expected_features = ["TransactionAmt", "ProductCD", "P_emaildomain", "DeviceType", "DeviceInfo"]
+    if gnn_metadata.get("input_features") != expected_features:
+        raise ValueError("GraphSAGE feature schema does not match checkout inputs")
+    gnn_model = GraphSAGE(
+        in_channels=int(gnn_metadata["in_channels"]),
+        hidden_channels=int(gnn_metadata["hidden_channels"]),
+        num_layers=int(gnn_metadata["num_layers"]),
+        dropout=float(gnn_metadata.get("dropout", 0.5)),
+        categorical_cardinalities=gnn_metadata["categorical_cardinalities"],
+        embedding_dim=int(gnn_metadata["embedding_dim"]),
+    )
+    gnn_model.load_state_dict(torch.load(os.path.join(MODELS_DIR, "graphsage.pth"), map_location="cpu", weights_only=True))
+    gnn_model.eval()
+    gnn_scalers = joblib.load(os.path.join(MODELS_DIR, "gnn_scalers.pkl"))
+    gnn_encoders = joblib.load(os.path.join(MODELS_DIR, "gnn_encoders.pkl"))
+    gnn_artifacts_loaded = True
+except Exception:
+    logger.exception("Failed to load the GraphSAGE model and preprocessing artifacts")
+
 class RegisterRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     email: str
@@ -403,6 +447,73 @@ def derive_checkout_product_category(checkout_snapshot):
         return next(iter(categories))
     return "Mixed"
 
+
+def predict_with_gnn(transaction_data, current_user, db):
+    """Score the new checkout node against a bounded, causal history graph."""
+    if not gnn_artifacts_loaded or gnn_model is None:
+        raise RuntimeError("GraphSAGE artifacts are unavailable")
+    edge_cols = gnn_metadata["edge_features"]
+    features = gnn_metadata["input_features"]
+    historical = (
+        db.query(Transaction)
+        .filter(Transaction.transaction_data.isnot(None))
+        .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+        .limit(5000)
+        .all()
+    )
+    rows = []
+    for item in reversed(historical):
+        values = item.transaction_data or {}
+        row = {column: values.get(column) for column in features}
+        row["created_at"] = item.created_at
+        rows.append(row)
+    current = {column: transaction_data.get(column) for column in features}
+    current["created_at"] = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    rows.append(current)
+    raw = pd.DataFrame(rows)
+    for column in gnn_metadata["categorical_features"]:
+        raw[column] = raw[column].fillna("UNKNOWN").astype(str)
+    raw["TransactionAmt"] = pd.to_numeric(raw["TransactionAmt"], errors="coerce").fillna(0.0)
+    processed, _, _ = select_features_and_preprocess(
+        raw,
+        gnn_metadata["numerical_features"],
+        gnn_metadata["categorical_features"],
+        is_train=False,
+        scalers=gnn_scalers,
+        encoders=gnn_encoders,
+    )
+    graph_frame = raw[["created_at"]].copy()
+    for feature in features:
+        graph_frame[feature] = processed[feature].to_numpy()
+    graph = build_homogeneous_transaction_graph(
+        graph_frame,
+        features,
+        edge_cols,
+        max_neighbors=int(gnn_metadata.get("max_neighbors", 10)),
+        edge_frame=raw[[*edge_cols, "created_at"]],
+    )
+    with torch.no_grad():
+        logits = gnn_model(graph.x, graph.edge_index)
+        probability = float(torch.sigmoid(logits[-1]).item())
+    return probability
+
+
+def score_transaction(transaction_data, current_user, db):
+    if PRIMARY_FRAUD_MODEL == "logistic_regression":
+        if not artifacts_loaded:
+            raise RuntimeError("Logistic Regression artifact is unavailable")
+        frame = pd.DataFrame([transaction_data])
+        return float(baseline_pipeline.predict_proba(frame)[0, 1]), "LogisticRegression_Baseline"
+    try:
+        return predict_with_gnn(transaction_data, current_user, db), "GraphSAGE"
+    except Exception:
+        logger.exception("GraphSAGE prediction failed")
+        if FALLBACK_FRAUD_MODEL == "logistic_regression" and artifacts_loaded:
+            logger.warning("Using explicitly configured Logistic Regression failure fallback")
+            frame = pd.DataFrame([transaction_data])
+            return float(baseline_pipeline.predict_proba(frame)[0, 1]), "LogisticRegression_Baseline_Fallback"
+        raise
+
 @app.get("/")
 def read_root():
     return {"message": "Fraud Detection Backend is running"}
@@ -458,8 +569,9 @@ def login_admin(request: LoginRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/fraud/predict", response_model=PredictionResponse)
 def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    if not artifacts_loaded:
-        raise HTTPException(status_code=500, detail="Model artifacts are not loaded.")
+    active_model_loaded = gnn_artifacts_loaded if PRIMARY_FRAUD_MODEL == "gnn" else artifacts_loaded
+    if not active_model_loaded:
+        raise HTTPException(status_code=500, detail="Configured fraud model artifacts are not loaded.")
         
     try:
         transaction_data = transaction.model_dump(exclude={"checkout_attempt_id", "checkout_snapshot"})
@@ -485,8 +597,7 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
                     decision=existing_prediction.decision,
                     model_used=existing_prediction.model_used,
                 )
-        df = pd.DataFrame([transaction_data])
-        fraud_prob = float(baseline_pipeline.predict_proba(df)[0, 1])
+        fraud_prob, model_name = score_transaction(transaction_data, current_user, db)
         risk_level, decision = classify_fraud_score(fraud_prob)
             
         # Store in database
@@ -506,7 +617,7 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
             fraud_probability=round(fraud_prob, 4),
             risk_level=risk_level,
             decision=decision,
-            model_used="LogisticRegression_Baseline"
+            model_used=model_name
         )
         db.add(db_pred)
         db.commit()
@@ -516,7 +627,7 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
             fraud_probability=round(fraud_prob, 4),
             risk_level=risk_level,
             decision=decision,
-            model_used="LogisticRegression_Baseline"
+            model_used=model_name
         )
         
     except HTTPException:

@@ -4,7 +4,7 @@ import { useParams, Link } from 'react-router-dom';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import EmptyState from '../components/common/EmptyState';
 import { getProductById } from '../services/productService';
-import { useCart } from '../context/CartContext';
+import { useCart } from '../context/cart';
 import { formatCurrency } from '../utils/formatters';
 import './ProductDetails.css';
 

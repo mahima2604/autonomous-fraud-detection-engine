@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { formatCurrency } from '../../utils/formatters';
-import { useCart } from '../../context/CartContext';
+import { useCart } from '../../context/cart';
 import './ProductCard.css';
 
 function ProductCard({ product }) {

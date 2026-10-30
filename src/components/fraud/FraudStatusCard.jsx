@@ -37,7 +37,11 @@ function FraudStatusCard({ result }) {
         <h3>{copy.heading}</h3>
         <RiskBadge riskLevel={result.riskLevel} />
       </div>
-      <p>{result.adminApproved ? 'An administrator approved this transaction. You can continue with the saved checkout.' : copy.body}</p>
+      <p>{result.adminApproved
+        ? 'An administrator approved this transaction. You can continue with the saved checkout.'
+        : result.decision === 'REVIEW' && result.reviewReason
+          ? `${result.reviewReason} The model score and model name are retained; payment is held for administrator review.`
+          : copy.body}</p>
       <div className="fraud-status-meta">
         <span>Reference: {result.transactionId}</span>
       </div>

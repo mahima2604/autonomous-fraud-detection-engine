@@ -1,7 +1,7 @@
 // CartItemRow.jsx — A single line item row in the shopping cart table.
 import { Link } from 'react-router-dom';
 import { formatCurrency } from '../../utils/formatters';
-import { useCart } from '../../context/CartContext';
+import { useCart } from '../../context/cart';
 import './CartItemRow.css';
 
 function CartItemRow({ item }) {

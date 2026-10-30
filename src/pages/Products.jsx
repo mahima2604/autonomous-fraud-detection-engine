@@ -86,7 +86,7 @@ function Products() {
           <span className="products-kicker">Store Catalogue</span>
           <h1 className="products-title">All Products &amp; Gear</h1>
           <p className="products-subtitle">
-            Browse genuine products protected by our automated fraud screening engine at checkout.
+            Browse our curated collection of premium tech, everyday carry, and lifestyle essentials.
           </p>
         </div>
 

@@ -1,7 +1,7 @@
 // Cart.jsx
 import { Link, useNavigate } from 'react-router-dom';
-import { useCart } from '../context/CartContext';
-import { useAuth } from '../context/AuthContext';
+import { useCart } from '../context/cart';
+import { useAuth } from '../context/auth';
 import CartItemRow from '../components/cart/CartItemRow';
 import EmptyState from '../components/common/EmptyState';
 import { formatCurrency } from '../utils/formatters';

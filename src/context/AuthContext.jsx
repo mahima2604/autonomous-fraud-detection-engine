@@ -2,10 +2,10 @@
 // Global authentication state. Wraps login/register and restores session
 // immediately from localStorage on startup.
 
-import { createContext, useContext, useState } from 'react';
+import { useState } from 'react';
 import * as authService from '../services/authService';
+import { AuthContext } from './auth';
 
-const AuthContext = createContext(null);
 const ROLE_KEY = 'auth_role';
 
 function getInitialAuthState() {
@@ -32,7 +32,7 @@ function getInitialAuthState() {
 
 export function AuthProvider({ children }) {
   const [authState, setAuthState] = useState(getInitialAuthState);
-  const [loading, setLoading] = useState(false);
+  const loading = false;
 
   const user = authState.user;
   const role = authState.role;
@@ -96,10 +96,4 @@ export function AuthProvider({ children }) {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
-  return ctx;
 }

@@ -26,6 +26,7 @@ import AdminCustomers from '../pages/admin/AdminCustomers';
 import AdminCustomerDetailPage from '../pages/admin/AdminCustomerDetailPage';
 import AdminTransactions from '../pages/admin/AdminTransactionsPage';
 import AdminExplanationPage from '../pages/admin/AdminExplanationPage';
+import AdminBenchmarkPage from '../pages/admin/AdminBenchmarkPage';
 import AdminLogin from '../pages/admin/AdminLogin';
 import AdminProtectedRoute from '../components/admin/AdminProtectedRoute';
 
@@ -82,6 +83,11 @@ function AppRoutes() {
         <Route path="transactions/:transactionId/explanation" element={
           <AdminProtectedRoute>
             <AdminExplanationPage />
+          </AdminProtectedRoute>
+        } />
+        <Route path="benchmark" element={
+          <AdminProtectedRoute>
+            <AdminBenchmarkPage />
           </AdminProtectedRoute>
         } />
       </Route>

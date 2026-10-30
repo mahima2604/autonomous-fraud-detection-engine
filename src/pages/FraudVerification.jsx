@@ -3,7 +3,7 @@
 // This page renders the returned assessment and contains no scoring logic.
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/auth';
 import { getPendingCheckout, savePendingCheckout } from '../services/checkoutService';
 import { analyzeTransaction, getTransactionStatus } from '../services/fraudService';
 import OrderSummary from '../components/checkout/OrderSummary';
@@ -48,6 +48,7 @@ function FraudVerification() {
         riskLevel: modelPrediction?.risk_level || savedResult.riskLevel,
         fraudScore: modelPrediction?.fraud_probability ?? savedResult.fraudScore,
         modelDecision,
+        reviewReason: modelPrediction?.review_reason || savedResult.reviewReason,
         decision: isApprovedReview ? 'APPROVE' : isRejectedReview ? 'REJECT' : modelDecision,
         transactionStatus: current.status,
         reviewDecision: current.review_decision,

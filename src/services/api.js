@@ -2,6 +2,7 @@
 // Centralized client for the FastAPI backend.
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+export const API_REQUEST_TIMEOUT_MS = 30_000;
 
 class ApiError extends Error {
   constructor(message, status, data) {
@@ -18,13 +19,33 @@ class ApiError extends Error {
  * @param {object} options - fetch options (method, body, headers...)
  */
 export async function apiRequest(path, options = {}) {
-  const { body, headers, ...rest } = options;
+  const {
+    body,
+    headers,
+    timeoutMs = API_REQUEST_TIMEOUT_MS,
+    signal: requestSignal,
+    ...rest
+  } = options;
 
   const token = localStorage.getItem('auth_token');
 
   const method = (rest.method || 'GET').toUpperCase();
   const url = `${API_BASE_URL}${path}`;
   let response;
+  let data = null;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const forwardAbort = () => controller.abort(requestSignal.reason);
+  if (requestSignal?.aborted) {
+    forwardAbort();
+  } else {
+    requestSignal?.addEventListener('abort', forwardAbort, { once: true });
+  }
+
   try {
     response = await fetch(url, {
       ...rest,
@@ -34,7 +55,16 @@ export async function apiRequest(path, options = {}) {
         ...headers,
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
     });
+    const text = await response.text();
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
+      }
+    }
   } catch (error) {
     console.error('[apiRequest] Fetch/network failure', {
       method,
@@ -42,17 +72,15 @@ export async function apiRequest(path, options = {}) {
       errorName: error?.name || 'Error',
       message: error?.message || 'Request failed before a response was received',
     });
-    throw new ApiError('Unable to reach the server. Please try again.', 0, null);
-  }
-
-  let data = null;
-  const text = await response.text();
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
+    const message = timedOut
+      ? 'The server did not respond in time. Please check that it is running and try again.'
+      : requestSignal?.aborted
+        ? 'The request was cancelled. Please try again.'
+        : 'Unable to reach the server. Please try again.';
+    throw new ApiError(message, 0, null);
+  } finally {
+    clearTimeout(timeoutId);
+    requestSignal?.removeEventListener('abort', forwardAbort);
   }
 
   if (!response.ok) {

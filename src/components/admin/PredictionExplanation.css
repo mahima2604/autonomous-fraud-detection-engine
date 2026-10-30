@@ -156,6 +156,76 @@
   margin: 0;
 }
 
+.prediction-review-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  background: #fffbeb;
+  color: #78350f;
+  font-size: 13px;
+}
+
+.prediction-review-actions p {
+  margin: 0;
+}
+
+.prediction-review-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.prediction-review-buttons .btn-review-approve,
+.prediction-review-buttons .btn-review-reject {
+  padding: 7px 12px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.prediction-review-buttons .btn-review-approve {
+  background: #059669;
+  color: #fff;
+  border: 1px solid #047857;
+}
+
+.prediction-review-buttons .btn-review-reject {
+  background: #fff;
+  color: #dc2626;
+  border: 1px solid #f87171;
+}
+
+.prediction-review-buttons button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.prediction-review-feedback {
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.prediction-review-success {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.prediction-review-warning {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.prediction-review-error {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
 /* Feature Inputs Dense Grid */
 .prediction-features-dense-grid {
   display: grid;

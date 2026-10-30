@@ -43,7 +43,7 @@ function AdminExplanationPage() {
             Deep Prediction Analysis: TXN-{transactionId}
           </h1>
           <p className="admin-page-subtitle">
-            Comprehensive breakdown of evaluated risk probability, decision boundaries, ingested features, and linear log-odds attribution weights.
+            Comprehensive breakdown of evaluated risk score, decision boundaries, ingested features, and model interpretability.
           </p>
         </div>
 

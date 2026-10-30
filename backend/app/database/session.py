@@ -1,9 +1,9 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
-from dotenv import load_dotenv
+from app.config import load_project_environment
 
-load_dotenv()
+load_project_environment()
 
 # Default to SQLite if DATABASE_URL is not set
 # In a real production setup, this would be a PostgreSQL URL.

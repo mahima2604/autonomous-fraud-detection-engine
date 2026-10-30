@@ -42,13 +42,13 @@ function Home() {
         <div className="hero-content">
           <div className="hero-kicker">
             <span className="hero-kicker-dot" />
-            <span>Curated Lifestyle &middot; Autonomous Fraud Defense</span>
+            <span>Curated Lifestyle &middot; Premium Gear</span>
           </div>
           <h1 className="hero-heading">
-            Premium Gear &amp; Tech, Protected by Real-Time Intelligence.
+            Premium Gear &amp; Tech for Modern Living.
           </h1>
           <p className="hero-description">
-            Experience frictionless shopping backed by our automated fraud detection engine. Every transaction is screened in milliseconds so genuine shoppers enjoy instant checkout without holds.
+            Discover carefully crafted everyday essentials, high-fidelity audio, wearables, and workspace accessories. Designed for performance, style, and everyday reliability.
           </p>
           <div className="hero-cta-group">
             <Link to="/products" className="btn btn-brand hero-primary-btn">
@@ -66,17 +66,17 @@ function Home() {
           <div className="hero-trust-metrics">
             <div className="metric-item">
               <strong>100%</strong>
-              <span>Screened Checkout</span>
+              <span>Authentic Gear</span>
             </div>
             <div className="metric-divider" />
             <div className="metric-item">
               <strong>Free</strong>
-              <span>Tracked Delivery</span>
+              <span>Express Delivery</span>
             </div>
             <div className="metric-divider" />
             <div className="metric-item">
-              <strong>0.30</strong>
-              <span>Auto-Approval Floor</span>
+              <strong>30-Day</strong>
+              <span>Easy Returns</span>
             </div>
           </div>
         </div>
@@ -89,34 +89,34 @@ function Home() {
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 <path d="M9 12l2 2 4-4" />
               </svg>
-              <span>Autonomous Risk Engine Active</span>
+              <span>The SecureCart Promise</span>
             </div>
-            <h3 className="showcase-title">How Protected Checkout Works</h3>
+            <h3 className="showcase-title">Why Shop With Us</h3>
             <div className="showcase-steps-list">
               <div className="showcase-step">
                 <span className="step-badge">1</span>
                 <div>
-                  <strong>Curate Your Cart</strong>
-                  <p>Browse genuine gear and add items to your basket.</p>
+                  <strong>Curated Selection</strong>
+                  <p>Handpicked products tested for superior durability, design, and performance.</p>
                 </div>
               </div>
               <div className="showcase-step">
                 <span className="step-badge">2</span>
                 <div>
-                  <strong>Instant ML Risk Assessment</strong>
-                  <p>Model scores transaction probability before payment.</p>
+                  <strong>Fast &amp; Tracked Dispatch</strong>
+                  <p>Same-day order processing with instant tracking straight to your door.</p>
                 </div>
               </div>
               <div className="showcase-step">
                 <span className="step-badge">3</span>
                 <div>
-                  <strong>Frictionless Payment</strong>
-                  <p>Approved orders proceed straight to payment simulation.</p>
+                  <strong>Secure &amp; Encrypted Checkout</strong>
+                  <p>Safe payment processing with full buyer protection and zero data sharing.</p>
                 </div>
               </div>
             </div>
             <div className="showcase-footer">
-              <span className="showcase-note">&bull; Zero real card data collected &bull; Safe test store</span>
+              <span className="showcase-note">&bull; Free shipping over $50 &bull; Dedicated 24/7 customer care</span>
             </div>
           </div>
         </div>
@@ -180,8 +180,8 @@ function Home() {
       {/* 4. Storefront Assurance Grid */}
       <section className="store-section assurance-section">
         <div className="assurance-header">
-          <h2>Engineered for Smooth Shopping</h2>
-          <p>Every layer of SecureCart is built for customer confidence and transparent security.</p>
+          <h2>Why Shop With SecureCart</h2>
+          <p>Premium quality gear, fast fulfillment, and complete peace of mind on every order.</p>
         </div>
 
         <div className="assurance-cards-grid">
@@ -192,8 +192,8 @@ function Home() {
                 <path d="M9 12l2 2 4-4" />
               </svg>
             </div>
-            <h3>Autonomous ML Defense</h3>
-            <p>Our serving engine computes behavioral risk scores in real-time, blocking fraudulent attempts before processing.</p>
+            <h3>Safe &amp; Secure Checkout</h3>
+            <p>End-to-end 256-bit encryption and advanced order protection ensure your transactions remain completely private.</p>
           </div>
 
           <div className="assurance-card">
@@ -203,8 +203,8 @@ function Home() {
                 <polyline points="22 4 12 14.01 9 11.01" />
               </svg>
             </div>
-            <h3>98%+ Genuine Approval</h3>
-            <p>Calibrated thresholds (score &le; 0.30) ensure your legitimate orders proceed straight to simulated checkout without delays.</p>
+            <h3>100% Genuine Quality</h3>
+            <p>Every product is sourced directly from certified brands and backed by our full money-back guarantee.</p>
           </div>
 
           <div className="assurance-card">
@@ -216,8 +216,8 @@ function Home() {
                 <circle cx="18.5" cy="18.5" r="2.5" />
               </svg>
             </div>
-            <h3>Tracked Store Fulfillment</h3>
-            <p>Simulated order creation instantly generates a valid Order Reference and links it to your account history.</p>
+            <h3>Fast Tracked Delivery</h3>
+            <p>Complimentary tracked express shipping with instant tracking updates from our warehouse to your door.</p>
           </div>
         </div>
       </section>

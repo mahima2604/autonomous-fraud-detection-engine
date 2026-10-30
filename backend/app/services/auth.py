@@ -10,13 +10,12 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.config import get_required_secret
 from app.database.session import get_db
 from app.models.user import User
 from app.models.admin import Admin
 
-TOKEN_SECRET = os.getenv("AUTH_TOKEN_SECRET", "").encode("utf-8")
-if len(TOKEN_SECRET) < 32:
-    raise RuntimeError("AUTH_TOKEN_SECRET must be configured with at least 32 characters")
+TOKEN_SECRET = get_required_secret("AUTH_TOKEN_SECRET", minimum_length=32)
 TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7
 PASSWORD_ITERATIONS = 310_000
 bearer_scheme = HTTPBearer(auto_error=False)

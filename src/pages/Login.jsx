@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/auth';
 import { isValidEmail, isNotEmpty } from '../utils/validators';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 import './AuthForm.css';

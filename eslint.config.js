@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 
 export default [
-  { ignores: ['dist', 'backend/venv/**', 'node_modules/**'] },
+  { ignores: ['dist', 'backend/venv/**', 'node_modules/**', '.pytest_cache/**', '**/.pytest_cache/**', '**/.pytest-tmp/**'] },
   {
     files: ['**/*.{js,jsx}'],
     languageOptions: {

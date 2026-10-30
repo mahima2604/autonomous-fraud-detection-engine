@@ -14,6 +14,7 @@ from sklearn.metrics import (average_precision_score, confusion_matrix,
                              f1_score, precision_score, recall_score,
                              roc_auc_score)
 from torch.optim import Adam
+from dotenv import load_dotenv
 
 from app.graph.graph_builder import build_homogeneous_transaction_graph
 from app.ml.baseline import train_baseline_logistic_regression
@@ -27,6 +28,11 @@ FEATURE_COLS = NUMERICAL_COLS + CATEGORICAL_COLS
 EDGE_COLS = ["P_emaildomain", "DeviceInfo"]
 SEED = 42
 THRESHOLD = 0.5
+load_dotenv()
+REVIEW_THRESHOLD = float(os.getenv("FRAUD_REVIEW_THRESHOLD", "0.30"))
+BLOCK_THRESHOLD = float(os.getenv("FRAUD_BLOCK_THRESHOLD", "0.70"))
+if not (0 < REVIEW_THRESHOLD < BLOCK_THRESHOLD < 1):
+    raise RuntimeError("Fraud thresholds must satisfy 0 < review < block < 1")
 
 
 def set_seed(seed=SEED):
@@ -82,6 +88,18 @@ def graph_frame(raw, processed):
     return result
 
 
+def _binary_threshold_metrics(labels, probabilities, threshold):
+    predictions = (probabilities > threshold).astype(int)
+    matrix = confusion_matrix(labels, predictions, labels=[0, 1])
+    return {
+        "threshold": float(threshold),
+        "precision": float(precision_score(labels, predictions, zero_division=0)),
+        "recall": float(recall_score(labels, predictions, zero_division=0)),
+        "f1": float(f1_score(labels, predictions, zero_division=0)),
+        "confusion_matrix": matrix.tolist(),
+    }
+
+
 def metrics(labels, probabilities):
     predictions = (probabilities >= THRESHOLD).astype(int)
     matrix = confusion_matrix(labels, predictions, labels=[0, 1])
@@ -93,6 +111,19 @@ def metrics(labels, probabilities):
         "roc_auc": float(roc_auc_score(labels, probabilities)),
         "confusion_matrix": matrix.tolist(),
         "threshold": THRESHOLD,
+        "class_distribution": {
+            "legitimate": int((labels == 0).sum()),
+            "fraud": int((labels == 1).sum()),
+        },
+        # The live route approves at/below review, reviews through block, and
+        # blocks above block. These binary views expose the cost at both live
+        # cutoffs without conflating REVIEW with an actual fraud label.
+        "live_policy": {
+            "review_threshold": REVIEW_THRESHOLD,
+            "block_threshold": BLOCK_THRESHOLD,
+            "review_or_block": _binary_threshold_metrics(labels, probabilities, REVIEW_THRESHOLD),
+            "block": _binary_threshold_metrics(labels, probabilities, BLOCK_THRESHOLD),
+        },
     }
 
 
@@ -127,8 +158,13 @@ def run_training(data_dir=None, output_dir=None, epochs=30):
     print(f"Chronological rows train/validation/test: {len(train_all)}/{len(validation)}/{len(test)}")
     print(f"Training rows after deterministic 1:{5} majority sampling: {len(train)}")
 
+    train_model_inputs = _raw_features(train)
+    categorical_unknown_training_counts = {
+        column: int(train_model_inputs[column].eq("UNKNOWN").sum())
+        for column in CATEGORICAL_COLS
+    }
     baseline = train_baseline_logistic_regression(
-        _raw_features(train), train.isFraud.to_numpy(), NUMERICAL_COLS, CATEGORICAL_COLS
+        train_model_inputs, train.isFraud.to_numpy(), NUMERICAL_COLS, CATEGORICAL_COLS
     )
     # Baseline and GNN use the identical held-out transactions and threshold.
     x_test_baseline = _raw_features(test)[FEATURE_COLS]
@@ -204,9 +240,14 @@ def run_training(data_dir=None, output_dir=None, epochs=30):
         "num_layers": 2,
         "dropout": 0.5,
         "categorical_cardinalities": categorical_cardinalities,
+        "categorical_unknown_training_counts": categorical_unknown_training_counts,
         "embedding_dim": 16,
         "seed": SEED,
         "threshold": THRESHOLD,
+        "live_decision_policy": {
+            "review_threshold": REVIEW_THRESHOLD,
+            "block_threshold": BLOCK_THRESHOLD,
+        },
         "split": "chronological 70/15/15 by TransactionDT",
         "train_sampling": "all fraud plus up to five legitimate rows per fraud, random_state=42",
         "held_out_metrics": gnn_metrics,
@@ -236,4 +277,11 @@ def run_training(data_dir=None, output_dir=None, epochs=30):
 
 
 if __name__ == "__main__":
-    run_training(epochs=int(os.getenv("GNN_EPOCHS", "30")))
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train and evaluate the fraud models.")
+    parser.add_argument("--data-dir", type=Path, help="Directory containing the labelled transaction and identity CSVs.")
+    parser.add_argument("--output-dir", type=Path, help="Output directory for all generated model artifacts.")
+    parser.add_argument("--epochs", type=int, default=int(os.getenv("GNN_EPOCHS", "30")))
+    arguments = parser.parse_args()
+    run_training(data_dir=arguments.data_dir, output_dir=arguments.output_dir, epochs=arguments.epochs)

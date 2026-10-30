@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../context/auth';
 import { isValidEmail, isNotEmpty } from '../../utils/validators';
 import LoadingSpinner from '../../components/common/LoadingSpinner';
 import './AdminLogin.css';
@@ -58,7 +58,7 @@ function AdminLogin() {
           </Link>
           <span className="admin-security-badge">
             <span className="admin-pulse-dot" />
-            TLS 256-Bit Encrypted
+            Protected administrator access
           </span>
         </div>
 

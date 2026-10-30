@@ -299,8 +299,8 @@ function FraudDashboard() {
             </div>
             <div className="distribution-metric">
               <span className="dist-label">Active Serving Model</span>
-              <strong className="dist-value text-muted" title="Active runtime model: Logistic Regression Baseline">
-                Logistic Regression (Active)
+              <strong className="dist-value text-muted" title={`Active runtime model: ${summary?.active_model || 'GraphSAGE'}`}>
+                {summary?.active_model ? `${summary.active_model} (Active)` : 'GraphSAGE (Active)'}
               </strong>
             </div>
           </div>

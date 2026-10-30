@@ -22,6 +22,7 @@ export function analyzeTransaction(transactionPayload, attemptId) {
     riskLevel: response.risk_level,
     fraudScore: response.fraud_probability,
     modelUsed: response.model_used,
+    reviewReason: response.review_reason,
     isMock: false,
   }));
 

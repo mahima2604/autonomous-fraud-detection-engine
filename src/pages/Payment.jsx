@@ -5,11 +5,11 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { getPendingCheckout, clearPendingCheckout } from '../services/checkoutService';
 import { createOrder } from '../services/orderService';
-import { useCart } from '../context/CartContext';
+import { useCart } from '../context/cart';
 import OrderSummary from '../components/checkout/OrderSummary';
 import EmptyState from '../components/common/EmptyState';
 import { formatCurrency } from '../utils/formatters';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/auth';
 
 function Payment() {
   const navigate = useNavigate();

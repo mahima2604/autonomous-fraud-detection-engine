@@ -1,4 +1,6 @@
-# Project Journal — Frontend
+# Project Journal — Frontend (Historical)
+
+> Historical notes below describe earlier mock-based stages and are not the current application contract. The current implementation, setup, model behavior, and known limitations are documented in the repository [README](../README.md).
 
 Concise technical record of the frontend implementation for the Autonomous
 Fraud Detection and Prevention Engine e-commerce app. Backend, database,

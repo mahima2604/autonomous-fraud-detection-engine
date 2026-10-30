@@ -281,6 +281,7 @@ function AdminTransactionsPage() {
                     <th className="th-score">Risk Score</th>
                     <th className="th-risk">Risk Category</th>
                     <th className="th-decision">Model Decision</th>
+                    <th className="th-model">Serving Model</th>
                     <th className="th-actions">Actions</th>
                   </tr>
                 </thead>
@@ -330,6 +331,9 @@ function AdminTransactionsPage() {
                               {transaction.reviewed_at && (
                                 <span className="reviewed-timestamp">{formatDateTime(transaction.reviewed_at)}</span>
                               )}
+                              {transaction.review_reason && (
+                                <span className="reviewed-timestamp" title={transaction.review_reason}>Note: {transaction.review_reason}</span>
+                              )}
                             </div>
                           ) : transaction.review_decision === 'REJECT' ? (
                             <div className="review-status-cell">
@@ -337,9 +341,19 @@ function AdminTransactionsPage() {
                               {transaction.reviewed_at && (
                                 <span className="reviewed-timestamp">{formatDateTime(transaction.reviewed_at)}</span>
                               )}
+                              {transaction.review_reason && (
+                                <span className="reviewed-timestamp" title={transaction.review_reason}>Reason: {transaction.review_reason}</span>
+                              )}
                             </div>
                           ) : pendingReview ? (
-                            <span className="badge badge-medium">Pending Review</span>
+                            <div className="review-status-cell">
+                              <span className="badge badge-medium">Pending Review</span>
+                              {(prediction?.review_reason || transaction.review_reason) && (
+                                <span className="reviewed-timestamp" title={prediction?.review_reason || transaction.review_reason}>
+                                  {prediction?.review_reason || transaction.review_reason}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-muted">—</span>
                           )}
@@ -360,6 +374,11 @@ function AdminTransactionsPage() {
                           ) : (
                             <span className="text-muted">—</span>
                           )}
+                        </td>
+                        <td className="td-model">
+                          <span className="model-tag" title={prediction?.model_used || 'Unknown'}>
+                            {prediction?.model_used || '—'}
+                          </span>
                         </td>
                         <td className="td-actions">
                           <div className="admin-row-actions">

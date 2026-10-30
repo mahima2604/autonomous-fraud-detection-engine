@@ -3,10 +3,9 @@
 // localStorage. When a user logs in, switches accounts, or creates a new ID,
 // the previous user's cart is not leaked and the active account's cart is loaded.
 
-import { createContext, useContext, useEffect, useState } from 'react';
-import { useAuth } from './AuthContext';
-
-const CartContext = createContext(null);
+import { useEffect, useState } from 'react';
+import { useAuth } from './auth';
+import { CartContext } from './cart';
 
 function getCartStorageKey(user) {
   if (user?.id) return `cart_items_user_${user.id}`;
@@ -23,14 +22,20 @@ function loadCart(key) {
   }
 }
 
+function removeCartStorageItem(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch (error) {
+    console.warn(`Failed to remove cart storage item ${key}`, error);
+  }
+}
+
 export function CartProvider({ children }) {
   const { user } = useAuth();
   const currentKey = getCartStorageKey(user);
 
   const [cartState, setCartState] = useState(() => {
-    try {
-      localStorage.removeItem('cart_items');
-    } catch {}
+    removeCartStorageItem('cart_items');
 
     return {
       key: currentKey,
@@ -100,9 +105,7 @@ export function CartProvider({ children }) {
 
   function clearCart() {
     setCartState((prev) => ({ ...prev, items: [] }));
-    try {
-      localStorage.removeItem(currentKey);
-    } catch {}
+    removeCartStorageItem(currentKey);
   }
 
   const items = cartState.items;
@@ -121,10 +124,4 @@ export function CartProvider({ children }) {
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
-}
-
-export function useCart() {
-  const ctx = useContext(CartContext);
-  if (!ctx) throw new Error('useCart must be used within a CartProvider');
-  return ctx;
 }

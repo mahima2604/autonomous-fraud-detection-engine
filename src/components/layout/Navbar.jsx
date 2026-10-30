@@ -1,8 +1,8 @@
 // Navbar.jsx — Primary site navigation shared by every customer page via MainLayout.
 import { useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
-import { useCart } from '../../context/CartContext';
+import { useAuth } from '../../context/auth';
+import { useCart } from '../../context/cart';
 import './Navbar.css';
 
 function Navbar() {
@@ -34,7 +34,7 @@ function Navbar() {
         <div className="container announcement-inner">
           <div className="announcement-left">
             <span className="announcement-shield-dot" />
-            <span>Autonomous AI Fraud Screening on all orders</span>
+            <span>Free Express Delivery &amp; 30-Day Returns on all orders</span>
           </div>
           <div className="announcement-right">
             <span>Free Express Delivery on all orders</span>

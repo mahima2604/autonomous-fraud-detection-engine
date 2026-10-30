@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, Query
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ValidationError, validator
 from typing import List, Optional
 import joblib
 import logging
@@ -12,6 +12,10 @@ import sys
 import torch
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect, text, func, and_, or_
+from sqlalchemy.exc import IntegrityError
+import hashlib
+import hmac
+import secrets
 
 # Ensure backend directory is in sys.path if not running module properly 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,10 +26,12 @@ from app.models.transaction import Transaction
 from app.models.user import User
 from app.models.admin import Admin
 from app.models.order import Order
+from app.models.email_verification import EmailVerification
+from app.services import email_otp
 from app.catalog import SAMPLE_CATALOG, get_product
 from app.services.auth import (
     create_access_token, create_admin_access_token, get_current_admin, get_current_user,
-    hash_password, verify_password,
+    hash_password, verify_password, TOKEN_SECRET,
 )
 from app.cors import install_global_cors
 from app.ml.model import GraphSAGE
@@ -127,118 +133,18 @@ BASELINE_FEATURES = (
 )
 
 
-def build_prediction_explanation(transaction, prediction):
-    """Describe stored model inputs and, when verifiable, linear log-odds contributions."""
-    payload = transaction.transaction_data or {}
-    pipeline = baseline_pipeline if artifacts_loaded else None
-    preprocessor = None
-    feature_names = list(BASELINE_FEATURES)
-    if pipeline is not None:
-        try:
-            preprocessor = pipeline.named_steps["preprocessor"]
-            feature_names = list(preprocessor.feature_names_in_)
-        except (AttributeError, KeyError, TypeError):
-            preprocessor = None
+def build_prediction_explanation(transaction, prediction, db=None):
+    """Describe stored model inputs, verify score reproduction, and provide truthful explanation."""
+    return explain_prediction(transaction, prediction, db=db)
 
-    feature_values = [{"name": name, "value": payload.get(name)} for name in feature_names]
-    explanation = {
-        "transaction_id": transaction.id,
-        "model_name": prediction.model_used,
-        "model_version": getattr(pipeline, "model_version_", None) if pipeline is not None else None,
-        "risk_score": prediction.fraud_probability,
-        "risk_category": prediction.risk_level,
-        "model_decision": prediction.decision,
-        "thresholds": {
-            "review": FRAUD_REVIEW_THRESHOLD,
-            "block": FRAUD_BLOCK_THRESHOLD,
-            "applicable_rule": (
-                f"score <= {FRAUD_REVIEW_THRESHOLD:.2f}"
-                if prediction.decision == "APPROVE"
-                else f"{FRAUD_REVIEW_THRESHOLD:.2f} < score <= {FRAUD_BLOCK_THRESHOLD:.2f}"
-                if prediction.decision == "REVIEW"
-                else f"score > {FRAUD_BLOCK_THRESHOLD:.2f}"
-            ),
-        },
-        "features": feature_values,
-        "attribution_available": False,
-        "feature_contributions": [],
-        "attribution_note": "Precise feature attribution is unavailable for this stored prediction.",
-        "review": {
-            "transaction_status": transaction.status,
-            "decision": transaction.review_decision,
-            "reviewed_at": transaction.reviewed_at,
-        },
-    }
-
-    if pipeline is None or preprocessor is None:
-        return explanation
-
-    try:
-        classifier = pipeline.named_steps["classifier"]
-        if len(classifier.classes_) != 2 or 1 not in classifier.classes_:
-            return explanation
-
-        model_input = pd.DataFrame([{name: payload.get(name) for name in feature_names}], columns=feature_names)
-        transformed = preprocessor.transform(model_input)
-        if hasattr(transformed, "toarray"):
-            transformed = transformed.toarray()
-        transformed = transformed[0]
-        output_names = list(preprocessor.get_feature_names_out())
-        if len(output_names) != len(transformed):
-            return explanation
-
-        classes = list(classifier.classes_)
-        positive_index = classes.index(1)
-        coefficient_index = 0 if len(classes) == 2 else positive_index
-        coefficients = classifier.coef_[coefficient_index]
-        intercept = float(classifier.intercept_[coefficient_index])
-        linear_score = float(intercept + sum(float(value) * float(weight) for value, weight in zip(transformed, coefficients)))
-        current_probability = float(pipeline.predict_proba(model_input)[0][positive_index])
-        if not math.isclose(current_probability, prediction.fraud_probability, abs_tol=0.000051):
-            explanation["attribution_note"] = (
-                "The currently loaded model does not reproduce the stored score, so feature attribution is unavailable."
-            )
-            return explanation
-
-        grouped = {name: 0.0 for name in feature_names}
-        sorted_features = sorted(feature_names, key=len, reverse=True)
-        for output_name, value, coefficient in zip(output_names, transformed, coefficients):
-            encoded_name = output_name.split("__", 1)[-1]
-            source = next(
-                (name for name in sorted_features if encoded_name == name or encoded_name.startswith(f"{name}_")),
-                None,
-            )
-            if source is None:
-                return explanation
-            grouped[source] += float(value) * float(coefficient)
-
-        explanation["attribution_available"] = True
-        explanation["feature_contributions"] = [
-            {
-                "name": name,
-                "contribution_log_odds": round(grouped[name], 6),
-                "direction": "increases" if grouped[name] > 0 else "decreases" if grouped[name] < 0 else "no change",
-            }
-            for name in feature_names
-        ]
-        explanation["baseline_log_odds"] = round(intercept, 6)
-        explanation["model_log_odds"] = round(linear_score, 6)
-        explanation["attribution_note"] = (
-            "Contributions are to the Logistic Regression log-odds relative to its intercept; "
-            "they describe model association, not causation. Categorical one-hot contributions are grouped by input feature."
-        )
-    except Exception:
-        # Keep the factual stored score and inputs available if a future artifact
-        # no longer exposes the fitted linear pipeline used for this prediction.
-        return explanation
-
-    return explanation
 
 # Load artifacts at startup
 try:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     MODELS_DIR = os.path.join(BASE_DIR, "models")
     baseline_pipeline = joblib.load(os.path.join(MODELS_DIR, "baseline_pipeline.pkl"))
+    if list(getattr(baseline_pipeline, "feature_names_in_", [])) != list(BASELINE_FEATURES):
+        raise ValueError("Logistic Regression artifact feature schema does not match checkout inputs")
     artifacts_loaded = True
 except Exception:
     logger.exception("Failed to load the Logistic Regression baseline artifact")
@@ -267,6 +173,13 @@ try:
     expected_features = ["TransactionAmt", "ProductCD", "P_emaildomain", "DeviceType", "DeviceInfo"]
     if gnn_metadata.get("input_features") != expected_features:
         raise ValueError("GraphSAGE feature schema does not match checkout inputs")
+    if gnn_metadata.get("numerical_features") != ["TransactionAmt"]:
+        raise ValueError("GraphSAGE numerical feature schema is incompatible")
+    expected_categorical = expected_features[1:]
+    if gnn_metadata.get("categorical_features") != expected_categorical:
+        raise ValueError("GraphSAGE categorical feature schema is incompatible")
+    if int(gnn_metadata.get("in_channels", -1)) != len(expected_features):
+        raise ValueError("GraphSAGE input dimension does not match checkout features")
     gnn_model = GraphSAGE(
         in_channels=int(gnn_metadata["in_channels"]),
         hidden_channels=int(gnn_metadata["hidden_channels"]),
@@ -279,6 +192,27 @@ try:
     gnn_model.eval()
     gnn_scalers = joblib.load(os.path.join(MODELS_DIR, "gnn_scalers.pkl"))
     gnn_encoders = joblib.load(os.path.join(MODELS_DIR, "gnn_encoders.pkl"))
+    cardinalities = gnn_metadata.get("categorical_cardinalities", [])
+    if len(cardinalities) != len(expected_categorical):
+        raise ValueError("GraphSAGE categorical dimensions do not match checkout encoders")
+    if any(
+        column not in gnn_encoders
+        or len(gnn_encoders[column].classes_) != cardinality
+        or "UNKNOWN" not in gnn_encoders[column].classes_
+        for column, cardinality in zip(expected_categorical, cardinalities)
+    ):
+        raise ValueError("GraphSAGE encoder artifacts do not match model embeddings")
+    if "TransactionAmt" not in gnn_scalers:
+        raise ValueError("GraphSAGE amount scaler is missing")
+    unknown_counts = gnn_metadata.get("categorical_unknown_training_counts", {})
+    if int(unknown_counts.get("ProductCD", 0)) == 0:
+        # Older metadata does not record sentinel counts. The local training
+        # data confirms ProductCD had no missing rows, so its reserved UNKNOWN
+        # embedding was never trained; neutralize it without altering artifacts.
+        product_index = expected_categorical.index("ProductCD")
+        unknown_index = list(gnn_encoders["ProductCD"].classes_).index("UNKNOWN")
+        with torch.no_grad():
+            gnn_model.embeddings[product_index].weight[unknown_index].zero_()
     gnn_artifacts_loaded = True
 except Exception:
     logger.exception("Failed to load the GraphSAGE model and preprocessing artifacts")
@@ -382,6 +316,7 @@ class PredictionResponse(BaseModel):
     risk_level: str
     decision: str
     model_used: str
+    review_reason: Optional[str] = None
 
 class OrderItemRequest(BaseModel):
     product_id: str = Field(..., min_length=1, max_length=64)
@@ -421,6 +356,191 @@ class CreateOrderRequest(BaseModel):
             raise ValueError("Each product may appear only once")
         return value
 
+
+class VerifyEmailRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6)
+
+    @validator("code")
+    def validate_code(cls, value):
+        if not value.isdigit():
+            raise ValueError("OTP must contain digits only")
+        return value
+
+
+def validate_checkout_items(items):
+    """Validate catalog items and calculate a trusted checkout total."""
+    if not isinstance(items, list) or not 1 <= len(items) <= 20:
+        raise HTTPException(status_code=422, detail="Checkout must contain between 1 and 20 products")
+    try:
+        validated_items = [item if isinstance(item, OrderItemRequest) else OrderItemRequest(**item) for item in items]
+    except (TypeError, ValueError, ValidationError) as error:
+        raise HTTPException(status_code=422, detail="Checkout contains invalid product details") from error
+    product_ids = [item.product_id for item in validated_items]
+    if len(product_ids) != len(set(product_ids)):
+        raise HTTPException(status_code=422, detail="Each product may appear only once")
+
+    priced_items = []
+    total = 0.0
+    for requested_item in validated_items:
+        product = get_product(requested_item.product_id)
+        if product is None:
+            raise HTTPException(status_code=422, detail="A selected product is unavailable")
+        if requested_item.quantity > product["stock"]:
+            raise HTTPException(status_code=409, detail="Requested quantity exceeds available sample stock")
+        line_total = round(product["price"] * requested_item.quantity, 2)
+        total += line_total
+        priced_items.append({
+            "product_id": product["id"],
+            "name": product["name"],
+            "category": product["category"],
+            "quantity": requested_item.quantity,
+            "unit_price": product["price"],
+            "line_total": line_total,
+        })
+    return validated_items, priced_items, round(total, 2)
+
+
+OTP_TTL = datetime.timedelta(minutes=10)
+OTP_RESEND_COOLDOWN = datetime.timedelta(seconds=30)
+OTP_SEND_WINDOW = datetime.timedelta(minutes=30)
+OTP_MAX_SENDS = 3
+OTP_MAX_ATTEMPTS = 5
+
+
+def otp_hash(user_id, email_address, code):
+    payload = f"{user_id}:{email_address.strip().lower()}:{code}".encode("utf-8")
+    return hmac.new(TOKEN_SECRET, payload, hashlib.sha256).hexdigest()
+
+
+def require_verified_email(db, user):
+    record = db.query(EmailVerification).filter(EmailVerification.user_id == user.id).first()
+    now = datetime.datetime.utcnow()
+    email_address = (user.email or "").strip().lower()
+    if (record is None or record.status != "VERIFIED" or record.email_address != email_address
+            or record.verified_at is None or record.verified_at + datetime.timedelta(hours=24) <= now):
+        raise HTTPException(status_code=403, detail="Verify your account email before continuing checkout")
+    return record
+
+
+@app.post("/api/email-verification/send")
+def send_email_verification(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    now = datetime.datetime.utcnow()
+    email_address = (current_user.email or "").strip().lower()
+    if not email_address:
+        raise HTTPException(status_code=409, detail="Your account does not have an email address to verify")
+    record = db.query(EmailVerification).filter(EmailVerification.user_id == current_user.id).first()
+    if record and record.resend_after > now:
+        seconds = max(1, int((record.resend_after - now).total_seconds()))
+        raise HTTPException(status_code=429, detail=f"Please wait {seconds} seconds before requesting another OTP")
+    if record and record.window_started_at + OTP_SEND_WINDOW > now and record.sends_in_window >= OTP_MAX_SENDS:
+        raise HTTPException(status_code=429, detail="OTP request limit reached. Try again in 30 minutes")
+    email_sends = db.query(EmailVerification).filter(
+        EmailVerification.email_address == email_address,
+        EmailVerification.created_at >= now - OTP_SEND_WINDOW,
+    ).count()
+    if email_sends >= OTP_MAX_SENDS:
+        raise HTTPException(status_code=429, detail="This email has reached its OTP request limit. Try again in 30 minutes")
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    if record is None:
+        record = EmailVerification(
+            user_id=current_user.id, email_address=email_address, code_hash=otp_hash(current_user.id, email_address, code),
+            status="PENDING", created_at=now, expires_at=now + OTP_TTL,
+            resend_after=now + OTP_RESEND_COOLDOWN, window_started_at=now,
+            sends_in_window=1, attempts=0,
+        )
+        db.add(record)
+    else:
+        if record.window_started_at + OTP_SEND_WINDOW <= now:
+            record.window_started_at = now
+            record.sends_in_window = 0
+        record.email_address = email_address
+        record.code_hash = otp_hash(current_user.id, email_address, code)
+        record.status = "PENDING"
+        record.created_at = now
+        record.expires_at = now + OTP_TTL
+        record.resend_after = now + OTP_RESEND_COOLDOWN
+        record.sends_in_window += 1
+        record.attempts = 0
+        record.verified_at = None
+    try:
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        logger.exception("Email verification challenge persistence failed")
+        raise HTTPException(status_code=503, detail="Could not save verification request; please retry") from error
+
+    try:
+        email_otp.send_code(email_address, code)
+    except Exception as error:
+        record.status = "FAILED"
+        record.code_hash = None
+        db.commit()
+        if isinstance(error, email_otp.DeliveryError):
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        logger.error("Email OTP delivery failed")
+        raise HTTPException(status_code=503, detail="Email delivery failed. Check SMTP settings and try again later.") from error
+    return {"status": "pending", "email_address": email_address,
+            "expires_in_seconds": int(OTP_TTL.total_seconds()),
+            "resend_after_seconds": int(OTP_RESEND_COOLDOWN.total_seconds())}
+
+
+@app.post("/api/email-verification/verify")
+def verify_email_address(
+    request: VerifyEmailRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    now = datetime.datetime.utcnow()
+    record = db.query(EmailVerification).filter(EmailVerification.user_id == current_user.id).first()
+    email_address = (current_user.email or "").strip().lower()
+    if (record is None or record.email_address != email_address or record.status != "PENDING"
+            or record.code_hash is None):
+        raise HTTPException(status_code=409, detail="Request a new OTP for your current account email")
+    if record.expires_at <= now:
+        record.status = "EXPIRED"
+        db.commit()
+        raise HTTPException(status_code=410, detail="OTP expired. Request a new OTP")
+    if record.attempts >= OTP_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts. Request a new OTP")
+    record.attempts += 1
+    approved = hmac.compare_digest(record.code_hash, otp_hash(current_user.id, email_address, request.code))
+    if approved:
+        record.status = "VERIFIED"
+        record.verified_at = now
+        record.code_hash = None
+    try:
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        logger.exception("Email verification result persistence failed")
+        raise HTTPException(status_code=503, detail="Could not save verification result; please retry") from error
+    if not approved:
+        raise HTTPException(status_code=400, detail="Invalid OTP. Check the code and try again")
+    return {"status": "verified"}
+
+
+@app.get("/api/email-verification/status")
+def email_verification_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    record = db.query(EmailVerification).filter(EmailVerification.user_id == current_user.id).first()
+    email_address = (current_user.email or "").strip().lower()
+    if record and record.email_address != email_address and record.status != "INVALIDATED":
+        record.status = "INVALIDATED"
+        record.verified_at = None
+        record.code_hash = None
+        db.commit()
+    try:
+        require_verified_email(db, current_user)
+    except HTTPException:
+        return {"verified": False, "email_address": email_address}
+    return {"verified": True, "email_address": email_address}
+
 class AdminReviewRequest(BaseModel):
     reason: Optional[str] = Field(None, max_length=1000)
 
@@ -432,70 +552,439 @@ class AdminReviewRequest(BaseModel):
         return normalized or None
 
 
-def derive_checkout_product_category(checkout_snapshot):
-    """Use the trusted catalog category as ProductCD for storefront checkouts."""
-    categories = {
-        product["category"]
-        for item in (checkout_snapshot or {}).get("items", [])
-        if isinstance(item, dict)
-        for product in [get_product(item.get("product_id"))]
-        if product is not None and product.get("category")
-    }
-    if not categories:
+def enrich_checkout_snapshot(checkout_snapshot):
+    """Keep trusted storefront categories separate from dataset model features."""
+    if not isinstance(checkout_snapshot, dict):
+        return checkout_snapshot
+    snapshot = dict(checkout_snapshot)
+    items = snapshot.get("items")
+    if isinstance(items, list):
+        enriched_items = []
+        for item in items:
+            if not isinstance(item, dict):
+                enriched_items.append(item)
+                continue
+            product = get_product(item.get("product_id"))
+            enriched_items.append({
+                **item,
+                **({"store_category": product["category"]} if product else {}),
+            })
+        snapshot["items"] = enriched_items
+    return snapshot
+
+
+def normalize_device_type(device_type):
+    """Validate client device type against model's training schema ('desktop', 'mobile', 'UNKNOWN')."""
+    if not device_type or not isinstance(device_type, str):
         return "UNKNOWN"
-    if len(categories) == 1:
-        return next(iter(categories))
-    return "Mixed"
+    normalized = str(device_type).strip().lower()
+    if normalized in {"desktop", "mobile"}:
+        return normalized
+    return "UNKNOWN"
+
+
+def email_domain_for_model(email):
+    """Derive and normalize customer's email domain safely for model preprocessing."""
+    if not email or not isinstance(email, str):
+        return "UNKNOWN"
+    normalized = email.strip().lower()
+    parts = normalized.rsplit("@", 1)
+    if len(parts) == 2 and parts[1]:
+        domain = parts[1].strip()
+        if "." in domain and not domain.startswith(".") and not domain.endswith("."):
+            return domain
+    return "UNKNOWN"
+
+
+def prepare_checkout_model_features(transaction_data, current_user, checkout_snapshot=None):
+    """Normalize storefront inputs to the meanings represented by the artifacts."""
+    features = dict(transaction_data)
+    user_email = getattr(current_user, "email", None) if current_user else None
+    features["P_emaildomain"] = email_domain_for_model(user_email)
+    features["DeviceType"] = normalize_device_type(transaction_data.get("DeviceType"))
+    # Store categories and browser platform strings are not IEEE-CIS ProductCD
+    # codes or device identifiers. Keep the trained model's explicit unknown value.
+    features["DeviceInfo"] = "UNKNOWN"
+    if checkout_snapshot is not None:
+        features["ProductCD"] = "UNKNOWN"
+    return features
+
+
+def checkout_feature_review_reason(transaction_data, model_name=None):
+    """Return why this checkout cannot be decided automatically from its features."""
+    reasons = []
+    product_code = transaction_data.get("ProductCD")
+    if product_code is None or not str(product_code).strip() or str(product_code).strip().upper() == "UNKNOWN":
+        reasons.append(
+            "ProductCD is unavailable: storefront product categories have no verified mapping "
+            "to the training dataset's ProductCD values."
+        )
+    else:
+        # UNKNOWN is a reserved encoder fallback, not evidence that the category
+        # was represented during training. The fitted GNN encoder is from the
+        # same sampled training rows as the baseline pipeline.
+        encoder = (gnn_encoders or {}).get("ProductCD")
+        supported_values = set(encoder.classes_) - {"UNKNOWN"} if encoder is not None else None
+        if supported_values is None and artifacts_loaded:
+            try:
+                categorical = baseline_pipeline.named_steps["preprocessor"].named_transformers_["cat"]
+                one_hot = categorical.named_steps["onehot"]
+                supported_values = set(one_hot.categories_[0])
+            except (AttributeError, KeyError, IndexError, TypeError):
+                supported_values = None
+        if supported_values is not None and str(product_code) not in supported_values:
+            reasons.append(
+                "ProductCD is outside the fitted training categories; the model score is advisory "
+                "and requires administrator review."
+            )
+
+    if model_name == "GraphSAGE":
+        reasons.append(
+            "GraphSAGE uses its saved P_emaildomain and DeviceInfo edge schema. Checkout currently "
+            "has no trustworthy DeviceInfo source, so graph context may be incomplete and must be reviewed."
+        )
+    elif model_name and model_name.startswith("LogisticRegression"):
+        if product_code is None or not str(product_code).strip() or str(product_code).strip().upper() == "UNKNOWN":
+            reasons.append(
+                "The Logistic Regression baseline was trained on historical IEEE-CIS data with class-balanced sampling; "
+                "its uncalibrated probability is advisory for storefront checkout and requires administrator review."
+            )
+    return " ".join(reasons) or None
+
+
+def _build_live_gnn_graph(transaction_data, current_user, db, before_transaction_id=None):
+    """Build checkout nodes using the saved GraphSAGE feature and edge schema."""
+    if not gnn_metadata:
+        raise RuntimeError("GraphSAGE metadata is unavailable")
+    edge_features = list(gnn_metadata.get("edge_features", []))
+    if edge_features != ["P_emaildomain", "DeviceInfo"]:
+        raise RuntimeError("Saved GraphSAGE edge schema is incompatible with checkout graph construction")
+    features = list(gnn_metadata["input_features"])
+    query = (
+        db.query(Transaction, User.email)
+        .outerjoin(User, Transaction.user_id == User.id)
+        .filter(Transaction.transaction_data.isnot(None))
+    )
+    if before_transaction_id is not None:
+        query = query.filter(Transaction.id < before_transaction_id)
+    historical = query.order_by(Transaction.created_at.desc(), Transaction.id.desc()).limit(5000).all()
+    rows = []
+    edge_rows = []
+    for item, customer_email in reversed(historical):
+        values = item.transaction_data or {}
+        row = {column: values.get(column) for column in features}
+        # These are the same sources used for current checkout: account email
+        # is backend-authenticated; no client-supplied domain or platform value
+        # is treated as an identity key.
+        row["P_emaildomain"] = email_domain_for_model(customer_email)
+        row["DeviceInfo"] = "UNKNOWN"
+        row["created_at"] = item.created_at
+        rows.append(row)
+        edge_rows.append({column: row.get(column) for column in edge_features} | {"created_at": item.created_at})
+
+    current = {column: transaction_data.get(column) for column in features}
+    current["P_emaildomain"] = email_domain_for_model(getattr(current_user, "email", None))
+    # Do not substitute navigator.platform for the dataset's DeviceInfo.
+    current["DeviceInfo"] = "UNKNOWN"
+    current["created_at"] = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    rows.append(current)
+    edge_rows.append({column: current.get(column) for column in edge_features} | {"created_at": current["created_at"]})
+
+    raw = pd.DataFrame(rows)
+    for column in gnn_metadata["categorical_features"]:
+        raw[column] = raw[column].fillna("UNKNOWN").astype(str)
+    raw["TransactionAmt"] = pd.to_numeric(raw["TransactionAmt"], errors="coerce").fillna(0.0)
+    processed, _, _ = select_features_and_preprocess(
+        raw, gnn_metadata["numerical_features"], gnn_metadata["categorical_features"],
+        is_train=False, scalers=gnn_scalers, encoders=gnn_encoders,
+    )
+    graph_frame = raw[["created_at"]].copy()
+    for feature in features:
+        graph_frame[feature] = processed[feature].to_numpy()
+    edge_frame = pd.DataFrame(edge_rows)
+    graph = build_homogeneous_transaction_graph(
+        graph_frame, features, edge_features,
+        max_neighbors=int(gnn_metadata.get("max_neighbors", 10)),
+        edge_frame=edge_frame,
+    )
+    target_idx = len(rows) - 1
+    connected_neighbors = (
+        int(torch.unique(graph.edge_index[0, graph.edge_index[1] == target_idx]).numel())
+        if graph.edge_index.numel() else 0
+    )
+    target_edge_mask = graph.edge_index[1] == target_idx if graph.edge_index.numel() else torch.zeros(0, dtype=torch.bool)
+    connected_edge_types = set(graph.edge_type[target_edge_mask].tolist()) if graph.edge_index.numel() else set()
+    live_edge_features = [column for index, column in enumerate(edge_features) if index in connected_edge_types]
+    missing_edge_features = [column for index, column in enumerate(edge_features) if index not in connected_edge_types]
+    topology_validated = not missing_edge_features and connected_neighbors > 0
+    context = {
+        "topology": "causal_transaction_graph",
+        "edge_type": ", ".join(live_edge_features) if live_edge_features else "No connected historical edges",
+        "training_topology": ", ".join(edge_features),
+        "live_topology": ", ".join(live_edge_features) if live_edge_features else "No connected historical edges",
+        "connected_neighbors": connected_neighbors,
+        "topology_validation_status": "VALIDATED" if topology_validated else "UNVALIDATED_INSUFFICIENT_DATA",
+        "missing_edge_features": missing_edge_features,
+        "feature_order": features,
+        "feature_dimensions": int(graph.x.shape[1]),
+        "topology_note": (
+            "Live inference uses the saved model feature order, fitted encoders/scaler, causal graph builder, "
+            "edge columns, and neighbor limit."
+            if topology_validated else
+            "The live graph uses the saved edge schema where genuine values exist, but full topology validation "
+            f"is unavailable: missing relationship data: {', '.join(missing_edge_features) or 'no connected historical transactions'}; "
+            f"connected historical transactions: {connected_neighbors}."
+        ),
+    }
+    return graph, context
 
 
 def predict_with_gnn(transaction_data, current_user, db):
     """Score the new checkout node against a bounded, causal history graph."""
     if not gnn_artifacts_loaded or gnn_model is None:
         raise RuntimeError("GraphSAGE artifacts are unavailable")
-    edge_cols = gnn_metadata["edge_features"]
-    features = gnn_metadata["input_features"]
-    historical = (
-        db.query(Transaction)
-        .filter(Transaction.transaction_data.isnot(None))
-        .order_by(Transaction.created_at.desc(), Transaction.id.desc())
-        .limit(5000)
-        .all()
-    )
-    rows = []
-    for item in reversed(historical):
-        values = item.transaction_data or {}
-        row = {column: values.get(column) for column in features}
-        row["created_at"] = item.created_at
-        rows.append(row)
-    current = {column: transaction_data.get(column) for column in features}
-    current["created_at"] = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-    rows.append(current)
-    raw = pd.DataFrame(rows)
-    for column in gnn_metadata["categorical_features"]:
-        raw[column] = raw[column].fillna("UNKNOWN").astype(str)
-    raw["TransactionAmt"] = pd.to_numeric(raw["TransactionAmt"], errors="coerce").fillna(0.0)
-    processed, _, _ = select_features_and_preprocess(
-        raw,
-        gnn_metadata["numerical_features"],
-        gnn_metadata["categorical_features"],
-        is_train=False,
-        scalers=gnn_scalers,
-        encoders=gnn_encoders,
-    )
-    graph_frame = raw[["created_at"]].copy()
-    for feature in features:
-        graph_frame[feature] = processed[feature].to_numpy()
-    graph = build_homogeneous_transaction_graph(
-        graph_frame,
-        features,
-        edge_cols,
-        max_neighbors=int(gnn_metadata.get("max_neighbors", 10)),
-        edge_frame=raw[[*edge_cols, "created_at"]],
-    )
+    graph, _ = _build_live_gnn_graph(transaction_data, current_user, db)
     with torch.no_grad():
         logits = gnn_model(graph.x, graph.edge_index)
         probability = float(torch.sigmoid(logits[-1]).item())
     return probability
+
+
+def reproduce_stored_prediction_score(transaction, prediction, db=None):
+    """Attempt to reproduce the stored risk score using the original model and inputs."""
+    model_name = prediction.model_used or ""
+    payload = transaction.transaction_data or {}
+
+    if model_name == "GraphSAGE":
+        if not gnn_artifacts_loaded or gnn_model is None:
+            return False, None, None, "GraphSAGE model artifacts are not currently loaded"
+        if db is None:
+            return False, None, None, "Database session was not provided to reconstruct historical graph context"
+        try:
+            user = db.query(User).filter(User.id == transaction.user_id).first()
+            graph, _ = _build_live_gnn_graph(
+                payload, user, db, before_transaction_id=transaction.id
+            )
+            with torch.no_grad():
+                logits = gnn_model(graph.x, graph.edge_index)
+                recomputed_prob = float(torch.sigmoid(logits[-1]).item())
+
+            target_idx = graph.x.shape[0] - 1
+            connected_neighbors = 0
+            if graph.edge_index.numel() > 0:
+                connected_neighbors = int((graph.edge_index[1] == target_idx).sum().item())
+
+            matches = math.isclose(recomputed_prob, prediction.fraud_probability, abs_tol=0.0001)
+            note = (
+                "Stored GraphSAGE risk score successfully reproduced from persisted features, historical graph context, and loaded neural network weights."
+                if matches
+                else f"Recomputed GraphSAGE score ({recomputed_prob:.4f}) does not match stored score ({prediction.fraud_probability:.4f}) within tolerance (0.0001)."
+            )
+            return matches, recomputed_prob, connected_neighbors, note
+        except Exception as error:
+            logger.exception("Failed to recompute GraphSAGE score for transaction %s", transaction.id)
+            return False, None, None, f"GraphSAGE score recomputation failed: {error}"
+
+    elif model_name.startswith("LogisticRegression"):
+        pipeline = baseline_pipeline if artifacts_loaded else None
+        if pipeline is None:
+            return False, None, None, "Logistic Regression artifact is not loaded"
+        try:
+            feature_names = list(getattr(pipeline, "feature_names_in_", BASELINE_FEATURES))
+            model_input = pd.DataFrame([{name: payload.get(name) for name in feature_names}], columns=feature_names)
+            classifier = pipeline.named_steps["classifier"]
+            classes = list(classifier.classes_)
+            positive_index = classes.index(1) if 1 in classes else 1
+            current_probability = float(pipeline.predict_proba(model_input)[0][positive_index])
+            matches = math.isclose(current_probability, prediction.fraud_probability, abs_tol=0.0001)
+            note = (
+                "Stored Logistic Regression risk score successfully reproduced from loaded baseline artifact."
+                if matches
+                else f"Recomputed Logistic Regression score ({current_probability:.4f}) does not match stored score ({prediction.fraud_probability:.4f}) within tolerance (0.0001)."
+            )
+            return matches, current_probability, None, note
+        except Exception as error:
+            return False, None, None, f"Score recomputation failed: {error}"
+
+    return False, None, None, f"No reproduction pipeline available for model '{model_name}'"
+
+
+def explain_prediction(transaction, prediction, db=None):
+    """Describe stored model inputs and, when verifiable, feature attribution or graph context."""
+    payload = transaction.transaction_data or {}
+    model_name = prediction.model_used or "Unknown"
+    is_gnn = model_name == "GraphSAGE"
+    is_lr = model_name.startswith("LogisticRegression")
+
+    pipeline = baseline_pipeline if (artifacts_loaded and is_lr) else None
+    preprocessor = None
+    feature_names = list(BASELINE_FEATURES)
+    if is_lr and pipeline is not None:
+        try:
+            preprocessor = pipeline.named_steps["preprocessor"]
+            feature_names = list(preprocessor.feature_names_in_)
+        except (AttributeError, KeyError, TypeError):
+            preprocessor = None
+    elif is_gnn and gnn_metadata is not None:
+        feature_names = list(gnn_metadata.get("input_features", BASELINE_FEATURES))
+
+    feature_values = [{"name": name, "value": payload.get(name)} for name in feature_names]
+    manual_review_reason = (
+        checkout_feature_review_reason(payload, prediction.model_used)
+        if prediction.decision == "REVIEW" else None
+    )
+    try:
+        _, score_decision = classify_fraud_score(prediction.fraud_probability)
+    except (TypeError, ValueError):
+        score_decision = None
+
+    model_version = (
+        gnn_metadata.get("model_version", "1")
+        if (is_gnn and gnn_metadata)
+        else getattr(pipeline, "model_version_", None) if pipeline is not None else None
+    )
+
+    matches_score, recomputed_score, connected_neighbors, reproduction_note = reproduce_stored_prediction_score(
+        transaction, prediction, db=db
+    )
+
+    explanation = {
+        "transaction_id": transaction.id,
+        "model_name": prediction.model_used,
+        "model_version": model_version,
+        "risk_score": prediction.fraud_probability,
+        "recomputed_risk_score": round(recomputed_score, 4) if recomputed_score is not None else None,
+        "score_reproduced": matches_score,
+        "reproduction_tolerance": 0.0001,
+        "reproduction_note": reproduction_note,
+        "risk_category": prediction.risk_level,
+        "model_decision": prediction.decision,
+        "automated_score_decision": score_decision,
+        "manual_review_reason": manual_review_reason,
+        "thresholds": {
+            "review": FRAUD_REVIEW_THRESHOLD,
+            "block": FRAUD_BLOCK_THRESHOLD,
+            "applicable_rule": (
+                f"manual review required: {manual_review_reason}"
+                if manual_review_reason
+                else f"score <= {FRAUD_REVIEW_THRESHOLD:.2f}"
+                if prediction.decision == "APPROVE"
+                else f"{FRAUD_REVIEW_THRESHOLD:.2f} < score <= {FRAUD_BLOCK_THRESHOLD:.2f}"
+                if prediction.decision == "REVIEW"
+                else f"score > {FRAUD_BLOCK_THRESHOLD:.2f}"
+            ),
+        },
+        "features": feature_values,
+        "attribution_available": False,
+        "feature_contributions": [],
+        "attribution_note": (
+            "Linear feature attribution is mathematically inapplicable to Graph Neural Networks. "
+            "GraphSAGE generates embeddings via non-linear transformations and neighborhood aggregation over graph edges."
+            if is_gnn
+            else "Precise feature attribution is unavailable for this stored prediction."
+        ),
+        "review": {
+            "transaction_status": transaction.status,
+            "decision": transaction.review_decision,
+            "reviewed_at": transaction.reviewed_at,
+        },
+    }
+
+    if is_gnn:
+        try:
+            user = db.query(User).filter(User.id == transaction.user_id).first() if db is not None else None
+            if db is None:
+                raise RuntimeError("Database session was not provided")
+            _, graph_context = _build_live_gnn_graph(payload, user, db, before_transaction_id=transaction.id)
+            graph_context["stored_score_reproduced"] = matches_score
+            if not matches_score:
+                graph_context["topology_validation_status"] = "UNVALIDATED_STORED_SCORE_MISMATCH"
+                graph_context["topology_note"] += (
+                    " The reconstructed graph does not reproduce this stored score, so the original "
+                    "prediction's exact inference graph cannot be validated from persisted data."
+                )
+        except Exception as error:
+            graph_context = {
+                "topology": "causal_transaction_graph",
+                "edge_type": "Unavailable",
+                "training_topology": ", ".join(gnn_metadata.get("edge_features", [])) if gnn_metadata else "Unavailable",
+                "live_topology": "Unavailable",
+                "connected_neighbors": connected_neighbors,
+                "topology_validation_status": "UNVALIDATED",
+                "missing_edge_features": [],
+                "topology_note": f"Live graph context could not be reconstructed: {error}",
+            }
+        explanation["graph_context"] = graph_context
+        return explanation
+
+    if not is_lr or pipeline is None or preprocessor is None:
+        return explanation
+
+    if not matches_score:
+        explanation["attribution_note"] = (
+            "The currently loaded model does not reproduce the stored score within tolerance (0.0001), "
+            "so feature attribution is unavailable."
+        )
+        return explanation
+
+    try:
+        classifier = pipeline.named_steps["classifier"]
+        if len(classifier.classes_) != 2 or 1 not in classifier.classes_:
+            return explanation
+
+        model_input = pd.DataFrame([{name: payload.get(name) for name in feature_names}], columns=feature_names)
+        transformed = preprocessor.transform(model_input)
+        if hasattr(transformed, "toarray"):
+            transformed = transformed.toarray()
+        transformed = transformed[0]
+        output_names = list(preprocessor.get_feature_names_out())
+        if len(output_names) != len(transformed):
+            return explanation
+
+        classes = list(classifier.classes_)
+        positive_index = classes.index(1)
+        coefficient_index = 0 if len(classes) == 2 else positive_index
+        coefficients = classifier.coef_[coefficient_index]
+        intercept = float(classifier.intercept_[coefficient_index])
+        linear_score = float(intercept + sum(float(value) * float(weight) for value, weight in zip(transformed, coefficients)))
+
+        grouped = {name: 0.0 for name in feature_names}
+        sorted_features = sorted(feature_names, key=len, reverse=True)
+        for output_name, value, coefficient in zip(output_names, transformed, coefficients):
+            encoded_name = output_name.split("__", 1)[-1]
+            source = next(
+                (name for name in sorted_features if encoded_name == name or encoded_name.startswith(f"{name}_")),
+                None,
+            )
+            if source is None:
+                return explanation
+            grouped[source] += float(value) * float(coefficient)
+
+        explanation["attribution_available"] = True
+        explanation["feature_contributions"] = [
+            {
+                "name": name,
+                "contribution_log_odds": round(grouped[name], 6),
+                "direction": "increases" if grouped[name] > 0 else "decreases" if grouped[name] < 0 else "no change",
+            }
+            for name in feature_names
+        ]
+        explanation["baseline_log_odds"] = round(intercept, 6)
+        explanation["model_log_odds"] = round(linear_score, 6)
+        explanation["calibration_notice"] = (
+            "The Logistic Regression probability reflects training on an artificially downsampled IEEE-CIS "
+            "dataset with class_weight='balanced'. It must not be interpreted as a true probability of fraud "
+            "on this storefront channel. The raw score is retained for diagnostic inspection; manual review is required."
+        )
+        explanation["attribution_note"] = (
+            "Contributions are to the Logistic Regression log-odds relative to its intercept; "
+            "they describe model association, not causation. Categorical one-hot contributions are grouped by input feature. "
+            "Notice: Probabilities are uncalibrated for storefront transactions."
+        )
+    except Exception:
+        return explanation
+
+    return explanation
 
 
 def score_transaction(transaction_data, current_user, db):
@@ -518,6 +1007,26 @@ def score_transaction(transaction_data, current_user, db):
 def read_root():
     return {"message": "Fraud Detection Backend is running"}
 
+@app.get("/health")
+@app.get("/api/health")
+def health_check(db: Session = Depends(get_db)):
+    db_healthy = True
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception:
+        db_healthy = False
+    active_loaded = gnn_artifacts_loaded if PRIMARY_FRAUD_MODEL == "gnn" else artifacts_loaded
+    overall_status = "healthy" if db_healthy and active_loaded else "degraded"
+    return {
+        "status": overall_status,
+        "database": "connected" if db_healthy else "disconnected",
+        "active_model": PRIMARY_FRAUD_MODEL,
+        "active_model_loaded": active_loaded,
+        "gnn_artifacts_loaded": gnn_artifacts_loaded,
+        "baseline_artifacts_loaded": artifacts_loaded,
+        "version": "1.0.0",
+    }
+
 @app.get("/api/products")
 def get_products():
     return SAMPLE_CATALOG
@@ -539,9 +1048,13 @@ def register_customer(request: RegisterRequest, db: Session = Depends(get_db)):
     try:
         db.commit()
         db.refresh(user)
-    except Exception:
+    except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
+        raise HTTPException(status_code=409, detail="An account with this email already exists") from error
+    except Exception as error:
+        db.rollback()
+        logger.exception("Customer registration persistence failed")
+        raise HTTPException(status_code=503, detail="Account could not be created; please retry") from error
     return AuthResponse(access_token=create_access_token(user.id), user=UserResponse(id=user.id, name=user.name or "", email=user.email))
 
 @app.post("/api/auth/login", response_model=AuthResponse)
@@ -575,9 +1088,22 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
         
     try:
         transaction_data = transaction.model_dump(exclude={"checkout_attempt_id", "checkout_snapshot"})
-        if transaction.checkout_snapshot is not None:
-            # ProductCD is derived from the backend catalog, not trusted from the browser.
-            transaction_data["ProductCD"] = derive_checkout_product_category(transaction.checkout_snapshot)
+        checkout_snapshot = enrich_checkout_snapshot(transaction.checkout_snapshot)
+        if checkout_snapshot is not None and "items" in checkout_snapshot:
+            require_verified_email(db, current_user)
+            checkout_snapshot["verified_email"] = (current_user.email or "").strip().lower()
+        elif checkout_snapshot and checkout_snapshot.get("verified_email"):
+            require_verified_email(db, current_user)
+            checkout_snapshot["verified_email"] = (current_user.email or "").strip().lower()
+        transaction_data = prepare_checkout_model_features(
+            transaction_data, current_user,
+            checkout_snapshot if checkout_snapshot and "items" in checkout_snapshot else None,
+        )
+        if checkout_snapshot is not None and "items" in checkout_snapshot:
+            _, _, trusted_total = validate_checkout_items(checkout_snapshot.get("items"))
+            if not math.isclose(trusted_total, round(transaction.TransactionAmt, 2), abs_tol=0.01):
+                raise HTTPException(status_code=409, detail="Cart total changed; restart fraud verification")
+            transaction_data["TransactionAmt"] = trusted_total
         if transaction.checkout_attempt_id:
             existing = db.query(Transaction).filter(
                 Transaction.checkout_attempt_id == transaction.checkout_attempt_id
@@ -596,16 +1122,22 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
                     risk_level=existing_prediction.risk_level,
                     decision=existing_prediction.decision,
                     model_used=existing_prediction.model_used,
+                    review_reason=(
+                        checkout_feature_review_reason(existing.transaction_data or {}, existing_prediction.model_used)
+                        if existing_prediction.decision == "REVIEW" else None
+                    ),
                 )
         fraud_prob, model_name = score_transaction(transaction_data, current_user, db)
-        risk_level, decision = classify_fraud_score(fraud_prob)
+        risk_level, score_decision = classify_fraud_score(fraud_prob)
+        review_reason = checkout_feature_review_reason(transaction_data, model_name)
+        decision = "REVIEW" if review_reason else score_decision
             
         # Store in database
         db_tx = Transaction(
             user_id=current_user.id,
-            amount=transaction.TransactionAmt,
+            amount=transaction_data["TransactionAmt"],
             transaction_data=transaction_data,
-            checkout_snapshot=transaction.checkout_snapshot,
+            checkout_snapshot=checkout_snapshot,
             checkout_attempt_id=transaction.checkout_attempt_id,
             status={"APPROVE": "APPROVED", "REVIEW": "REVIEW", "BLOCK": "BLOCKED"}[decision],
         )
@@ -627,12 +1159,36 @@ def predict_fraud(transaction: TransactionInput, db: Session = Depends(get_db), 
             fraud_probability=round(fraud_prob, 4),
             risk_level=risk_level,
             decision=decision,
-            model_used=model_name
+            model_used=model_name,
+            review_reason=review_reason,
         )
         
     except HTTPException:
         db.rollback()
         raise
+    except IntegrityError:
+        db.rollback()
+        if transaction.checkout_attempt_id:
+            existing = db.query(Transaction).filter(
+                Transaction.checkout_attempt_id == transaction.checkout_attempt_id
+            ).first()
+            if existing is not None and existing.user_id == current_user.id:
+                existing_prediction = db.query(FraudPrediction).filter(
+                    FraudPrediction.transaction_id == existing.id
+                ).order_by(FraudPrediction.created_at.desc(), FraudPrediction.id.desc()).first()
+                if existing_prediction is not None:
+                    return PredictionResponse(
+                        transaction_id=existing.id,
+                        fraud_probability=existing_prediction.fraud_probability,
+                        risk_level=existing_prediction.risk_level,
+                        decision=existing_prediction.decision,
+                        model_used=existing_prediction.model_used,
+                        review_reason=(
+                            checkout_feature_review_reason(existing.transaction_data or {}, existing_prediction.model_used)
+                            if existing_prediction.decision == "REVIEW" else None
+                        ),
+                    )
+        raise HTTPException(status_code=409, detail="Checkout attempt conflicts with an existing transaction")
     except Exception as e:
         db.rollback()
         logger.exception("Fraud prediction failed")
@@ -659,17 +1215,22 @@ def serialize_order(order):
 
 @app.post("/api/orders", status_code=201)
 def create_order(request: CreateOrderRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    transaction = db.query(Transaction).filter(
+        Transaction.id == request.transaction_id, Transaction.user_id == current_user.id
+    ).first()
+    if transaction is None:
+        raise HTTPException(status_code=404, detail="Transaction not found")
     existing = db.query(Order).filter(Order.transaction_id == request.transaction_id).first()
     if existing is not None:
         if existing.user_id != current_user.id:
             raise HTTPException(status_code=404, detail="Transaction not found")
         return serialize_order(existing)
 
-    transaction = db.query(Transaction).filter(
-        Transaction.id == request.transaction_id, Transaction.user_id == current_user.id
-    ).first()
-    if transaction is None:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+    verified_email = (transaction.checkout_snapshot or {}).get("verified_email")
+    current_email = (current_user.email or "").strip().lower()
+    if not verified_email or verified_email != current_email:
+        raise HTTPException(status_code=403, detail="Email verification is required before ordering")
+    require_verified_email(db, current_user)
 
     prediction = db.query(FraudPrediction).filter(
         FraudPrediction.transaction_id == transaction.id
@@ -688,7 +1249,7 @@ def create_order(request: CreateOrderRequest, db: Session = Depends(get_db), cur
     # Once captured, the backend snapshot is authoritative for resumed checkout.
     # Legacy transactions without snapshots continue to use the validated request.
     snapshot = transaction.checkout_snapshot
-    if snapshot:
+    if snapshot and "items" in snapshot:
         try:
             items = [OrderItemRequest(**item) for item in snapshot["items"]]
             shipping_address = OrderAddressInput(**snapshot["shipping_address"])
@@ -704,24 +1265,7 @@ def create_order(request: CreateOrderRequest, db: Session = Depends(get_db), cur
         billing_address = request.billing_address
         payment_method = request.payment_method
 
-    priced_items = []
-    total = 0.0
-    for requested_item in items:
-        product = get_product(requested_item.product_id)
-        if product is None:
-            raise HTTPException(status_code=422, detail="A selected product is unavailable")
-        if requested_item.quantity > product["stock"]:
-            raise HTTPException(status_code=409, detail="Requested quantity exceeds available sample stock")
-        line_total = round(product["price"] * requested_item.quantity, 2)
-        total += line_total
-        priced_items.append({
-            "product_id": product["id"],
-            "name": product["name"],
-            "quantity": requested_item.quantity,
-            "unit_price": product["price"],
-            "line_total": line_total,
-        })
-    total = round(total, 2)
+    items, priced_items, total = validate_checkout_items(items)
     if not math.isclose(total, round(transaction.amount, 2), abs_tol=0.01):
         raise HTTPException(status_code=409, detail="Cart total changed; restart fraud verification")
 
@@ -742,6 +1286,16 @@ def create_order(request: CreateOrderRequest, db: Session = Depends(get_db), cur
     try:
         db.commit()
         db.refresh(order)
+    except IntegrityError as error:
+        db.rollback()
+        # Concurrent retries can race after the initial idempotency lookup.
+        persisted = db.query(Order).filter(Order.transaction_id == transaction.id).first()
+        if persisted is not None:
+            if persisted.user_id == current_user.id:
+                return serialize_order(persisted)
+            raise HTTPException(status_code=404, detail="Transaction not found") from error
+        logger.exception("Order persistence failed")
+        raise HTTPException(status_code=503, detail="Order could not be saved; please retry") from error
     except Exception as error:
         db.rollback()
         logger.exception("Order persistence failed")
@@ -783,6 +1337,10 @@ def get_transaction_status(
                 "risk_level": prediction.risk_level,
                 "decision": prediction.decision,
                 "model_used": prediction.model_used,
+                "review_reason": (
+                    checkout_feature_review_reason(transaction.transaction_data or {}, prediction.model_used)
+                    if prediction.decision == "REVIEW" else None
+                ),
                 "created_at": prediction.created_at,
             }
             if prediction is not None else None
@@ -837,6 +1395,10 @@ def get_recent_predictions(limit: int = Query(default=100, ge=1, le=500), db: Se
             "status": transaction.status,
             "review_decision": transaction.review_decision,
             "reviewed_at": transaction.reviewed_at,
+            "review_reason": (
+                checkout_feature_review_reason(transaction.transaction_data or {}, pred.model_used)
+                if pred.decision == "REVIEW" else transaction.review_reason
+            ),
             "amount": transaction.amount,
             "customer_name": customer.name if customer is not None else None,
             "customer_email": customer.email if customer is not None else None,
@@ -865,14 +1427,35 @@ def get_fraud_summary(db: Session = Depends(get_db), current_admin: Admin = Depe
     )
     total = sum(counts.values())
     
+    active_serving_model = "GraphSAGE" if PRIMARY_FRAUD_MODEL == "gnn" else "Logistic Regression"
     return {
         "total_predictions": total,
         "risk_breakdown": {
             "LOW": counts.get("LOW", 0),
             "MEDIUM": counts.get("MEDIUM", 0),
             "HIGH": counts.get("HIGH", 0)
-        }
+        },
+        "active_model": active_serving_model,
+        "primary_model": PRIMARY_FRAUD_MODEL,
+        "gnn_loaded": gnn_artifacts_loaded,
     }
+
+
+@app.get("/api/admin/benchmark/evaluation")
+def get_benchmark_evaluation(
+    force_refresh: bool = False,
+    current_admin: Admin = Depends(get_current_admin),
+):
+    """Reproducible held-out benchmark evaluation on IEEE-CIS dataset for GraphSAGE and Logistic Regression."""
+    try:
+        from app.ml.benchmark_eval import get_or_run_benchmark
+        return get_or_run_benchmark(force_refresh=force_refresh)
+    except FileNotFoundError as fnf_err:
+        logger.exception("Benchmark files or artifacts not found")
+        raise HTTPException(status_code=404, detail=str(fnf_err))
+    except Exception as exc:
+        logger.exception("Failed to run benchmark evaluation")
+        raise HTTPException(status_code=500, detail=f"Benchmark evaluation failed: {str(exc)}")
 
 
 @app.get("/api/admin/transactions")
@@ -927,6 +1510,7 @@ def get_admin_transactions(db: Session = Depends(get_db), current_admin: Admin =
             "status": transaction.status,
             "review_decision": transaction.review_decision,
             "reviewed_at": transaction.reviewed_at,
+            "review_reason": transaction.review_reason,
             "created_at": transaction.created_at,
             "order_id": order_id,
             "customer": (
@@ -940,6 +1524,10 @@ def get_admin_transactions(db: Session = Depends(get_db), current_admin: Admin =
                 "risk_level": risk_level,
                 "decision": decision,
                 "model_used": model_used,
+                "review_reason": (
+                    checkout_feature_review_reason(transaction.transaction_data or {}, model_used)
+                    if decision == "REVIEW" else transaction.review_reason
+                ),
                 "prediction_created_at": prediction_created_at,
             }
             if prediction_id is not None else None
@@ -962,7 +1550,7 @@ def get_admin_transaction_explanation(
     ).order_by(FraudPrediction.created_at.desc(), FraudPrediction.id.desc()).first()
     if prediction is None:
         raise HTTPException(status_code=404, detail="No fraud prediction is recorded for this transaction")
-    return build_prediction_explanation(transaction, prediction)
+    return build_prediction_explanation(transaction, prediction, db=db)
 
 
 def serialize_review_transaction(transaction, customer, prediction):
@@ -971,6 +1559,9 @@ def serialize_review_transaction(transaction, customer, prediction):
         "amount": transaction.amount,
         "currency": transaction.currency,
         "status": transaction.status,
+        "review_decision": transaction.review_decision,
+        "reviewed_at": transaction.reviewed_at,
+        "review_reason": transaction.review_reason,
         "created_at": transaction.created_at,
         "customer": (
             {"user_id": customer.id, "name": customer.name, "email": customer.email}
@@ -981,6 +1572,10 @@ def serialize_review_transaction(transaction, customer, prediction):
             "risk_level": prediction.risk_level,
             "decision": prediction.decision,
             "model_used": prediction.model_used,
+            "review_reason": (
+                checkout_feature_review_reason(transaction.transaction_data or {}, prediction.model_used)
+                if prediction.decision == "REVIEW" else transaction.review_reason
+            ),
             "prediction_created_at": prediction.created_at,
         },
     }
@@ -1056,7 +1651,12 @@ def decide_review(transaction_id: int, decision: str, request: AdminReviewReques
     if updated != 1:
         db.rollback()
         raise HTTPException(status_code=409, detail="This transaction has already been reviewed")
-    db.commit()
+    try:
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        logger.exception("Administrator review persistence failed")
+        raise HTTPException(status_code=503, detail="Review decision could not be saved; please retry") from error
     transaction = db.query(Transaction).filter(Transaction.id == transaction_id).first()
     return {
         "transaction_id": transaction.id,
@@ -1165,6 +1765,12 @@ def get_admin_customer_details(
                         "risk_level": prediction.risk_level,
                         "decision": prediction.decision,
                         "model_used": prediction.model_used,
+                        "review_reason": (
+                            checkout_feature_review_reason(
+                                transaction.transaction_data or {}, prediction.model_used
+                            )
+                            if prediction.decision == "REVIEW" else None
+                        ),
                         "created_at": prediction.created_at,
                     }
                     if prediction is not None and prediction.id is not None

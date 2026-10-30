@@ -17,6 +17,8 @@ data/
 
 # Python cache
 .pytest_cache/
+**/.pytest_cache/
+**/.pytest-tmp/
 .mypy_cache/
 
 # Frontend build
@@ -33,3 +35,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Temporary pytest output
+.test-tmp-graph/
+.pytest-deep-pred-review-controls/
+.pytest-tmp/
+backend/pytest-run-*/

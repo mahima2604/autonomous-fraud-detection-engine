@@ -13,9 +13,9 @@ export function buildTransactionPayload({ user, amount, items = [], paymentMetho
     // Extract domain from user if possible
     P_emaildomain: user?.email ? user.email.split('@')[1] : 'UNKNOWN',
     
-    // Device info can be legitimately collected from navigator
+    // A browser platform string is not a reliable device identifier for the model.
     DeviceType: /Mobi|Android/i.test(navigator.userAgent) ? "mobile" : "desktop",
-    DeviceInfo: navigator.platform,
+    DeviceInfo: 'UNKNOWN',
     checkout_snapshot: {
       items: items.map((item) => ({ product_id: item.id, quantity: item.quantity })),
       payment_method: paymentMethod,

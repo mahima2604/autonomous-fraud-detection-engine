@@ -36,11 +36,16 @@ def build_homogeneous_transaction_graph(
     rank = np.empty(len(frame), dtype=np.int64)
     rank[ordering] = np.arange(len(frame))
 
-    sources, targets = [], []
-    for column in edge_cols:
+    sources, targets, edge_types = [], [], []
+    for edge_type, column in enumerate(edge_cols):
         if column not in edges:
             continue
-        valid = edges[column].notna() & (edges[column].astype(str).str.len() > 0)
+        normalized_keys = edges[column].astype(str).str.strip()
+        valid = (
+            edges[column].notna()
+            & normalized_keys.ne("")
+            & normalized_keys.str.casefold().ne("unknown")
+        )
         groups = edges.loc[valid, [column]].assign(_node=np.flatnonzero(valid.to_numpy()))
         for _, rows in groups.groupby(column, sort=False, dropna=True):
             nodes = rows["_node"].to_numpy()
@@ -53,9 +58,11 @@ def build_homogeneous_transaction_graph(
                 for source in predecessors:
                     sources.append(int(source))
                     targets.append(int(target))
+                    edge_types.append(edge_type)
                     if not causal:
                         sources.append(int(target))
                         targets.append(int(source))
+                        edge_types.append(edge_type)
 
     if sources:
         edge_index = torch.tensor([sources, targets], dtype=torch.long)
@@ -65,6 +72,7 @@ def build_homogeneous_transaction_graph(
     x = torch.tensor(frame[feature_cols].to_numpy(dtype=np.float32, copy=True), dtype=torch.float32)
     y = torch.as_tensor(frame["isFraud"].to_numpy(dtype=np.float32), dtype=torch.float32) if "isFraud" in frame else None
     graph = Data(x=x, edge_index=edge_index, y=y)
+    graph.edge_type = torch.tensor(edge_types, dtype=torch.long)
     if "TransactionID" in frame:
         graph.transaction_ids = frame["TransactionID"].to_numpy()
     return graph

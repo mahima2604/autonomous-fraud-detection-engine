@@ -16,8 +16,8 @@ function Footer() {
               </svg>
             </div>
             <div>
-              <strong>Autonomous AI Security</strong>
-              <p>Every checkout is scored in real time against ML baselines.</p>
+              <strong>Safe &amp; Secure Checkout</strong>
+              <p>Bank-grade 256-bit encryption on all orders.</p>
             </div>
           </div>
 
@@ -25,7 +25,7 @@ function Footer() {
             <div className="trust-icon" aria-hidden="true">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <rect x="1" y="3" width="15" height="13" />
-                <polygon points="16 8 20 8 23 11 23 16 16 16 16 8" />
+                <polygon points="16 8 20 8 23 11 23 16 16 16 8" />
                 <circle cx="5.5" cy="18.5" r="2.5" />
                 <circle cx="18.5" cy="18.5" r="2.5" />
               </svg>
@@ -39,13 +39,12 @@ function Footer() {
           <div className="trust-strip-item">
             <div className="trust-icon" aria-hidden="true">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
-                <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                <path d="M20 6L9 17l-5-5" />
               </svg>
             </div>
             <div>
-              <strong>Simulated Safe Payments</strong>
-              <p>Zero real credit card storage; protected test environment.</p>
+              <strong>Hassle-Free Returns</strong>
+              <p>30-day return policy with full money-back guarantee.</p>
             </div>
           </div>
         </div>
@@ -66,13 +65,14 @@ function Footer() {
               <span className="footer-brand-title">SecureCart</span>
             </Link>
             <p className="footer-tagline">
-              An intelligent e-commerce storefront backed by autonomous machine learning fraud risk scoring and real-time transaction defense.
+              Curated everyday tech, modern lifestyle essentials, and premium accessories delivered straight to your door.
             </p>
             <div className="footer-cert-badges">
               <span className="cert-pill">
-                <span className="cert-dot" /> Live ML Screening
+                <span className="cert-dot" /> Secure Checkout
               </span>
               <span className="cert-pill">TLS 256-Bit</span>
+              <span className="cert-pill">Verified Merchant</span>
             </div>
           </div>
 
@@ -81,10 +81,10 @@ function Footer() {
             <h4 className="footer-heading">Catalog</h4>
             <ul className="footer-links-list">
               <li><Link to="/products">All Products</Link></li>
-              <li><Link to="/products?category=Audio">Audio & Headphones</Link></li>
-              <li><Link to="/products?category=Wearables">Wearables & Health</Link></li>
+              <li><Link to="/products?category=Audio">Audio &amp; Headphones</Link></li>
+              <li><Link to="/products?category=Wearables">Wearables &amp; Health</Link></li>
               <li><Link to="/products?category=Accessories">Accessories</Link></li>
-              <li><Link to="/products?category=Home">Home & Office</Link></li>
+              <li><Link to="/products?category=Home">Home &amp; Office</Link></li>
             </ul>
           </div>
 
@@ -100,13 +100,13 @@ function Footer() {
             </ul>
           </div>
 
-          {/* Security & Operator */}
+          {/* Customer Support & Portal */}
           <div className="footer-col">
-            <h4 className="footer-heading">Security Platform</h4>
+            <h4 className="footer-heading">Help &amp; Support</h4>
             <ul className="footer-links-list">
-              <li><span className="footer-note-text">Active Model: Logistic Regression Baseline</span></li>
-              <li><span className="footer-note-text">Automated Threshold Decisions</span></li>
-              <li><span className="footer-note-text">Feature Contribution Attributions</span></li>
+              <li><span className="footer-note-text">Track Your Shipment</span></li>
+              <li><span className="footer-note-text">30-Day Return Policy</span></li>
+              <li><span className="footer-note-text">24/7 Dedicated Support</span></li>
               <li>
                 <Link to="/admin/login" className="footer-admin-btn">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -123,10 +123,10 @@ function Footer() {
         {/* Bottom copyright & disclaimers */}
         <div className="footer-bottom-bar">
           <p className="copyright-text">
-            &copy; {new Date().getFullYear()} SecureCart &middot; Autonomous Fraud Detection and Prevention Engine. All simulated rights reserved.
+            &copy; {new Date().getFullYear()} SecureCart, Inc. All rights reserved.
           </p>
           <p className="disclaimer-text">
-            Simulated checkout environment. Fraud scores support automated risk evaluation and administrative review.
+            Secure shopping &middot; Fast fulfillment &middot; Quality guaranteed.
           </p>
         </div>
       </div>

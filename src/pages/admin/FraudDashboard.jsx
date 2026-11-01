@@ -12,8 +12,12 @@ import './FraudDashboard.css';
 
 const DECISION_CLASS = {
   APPROVE: 'badge-low',
+  ADMIN_APPROVE: 'badge-low',
   REVIEW: 'badge-medium',
+  VERIFY: 'badge-medium',
   BLOCK: 'badge-high',
+  ADMIN_REJECT: 'badge-high',
+  REJECT: 'badge-high',
 };
 
 function FraudDashboard() {
@@ -85,12 +89,24 @@ function FraudDashboard() {
     const low = summary.risk_breakdown?.LOW || 0;
     const med = summary.risk_breakdown?.MEDIUM || 0;
     const high = summary.risk_breakdown?.HIGH || 0;
+    const operational = summary.transaction_status_breakdown || {};
+    const rates = summary.transaction_status_rates || {};
 
     const lowPct = total > 0 ? ((low / total) * 100).toFixed(1) : '0.0';
     const medPct = total > 0 ? ((med / total) * 100).toFixed(1) : '0.0';
     const highPct = total > 0 ? ((high / total) * 100).toFixed(1) : '0.0';
 
-    return { total, low, med, high, lowPct, medPct, highPct };
+    return {
+      total, low, med, high, lowPct, medPct, highPct,
+      approved: operational.approved || 0,
+      pendingReview: operational.pending_review || 0,
+      blocked: operational.blocked || 0,
+      adminRejected: operational.admin_rejected || 0,
+      adminApproved: operational.admin_approved || 0,
+      autoApprovalPct: (Number(rates.auto_approval) * 100 || 0).toFixed(1),
+      reviewQueuePct: (Number(rates.manual_review_queue) * 100 || 0).toFixed(1),
+      preventionPct: (Number(rates.automated_prevention) * 100 || 0).toFixed(1),
+    };
   }, [summary]);
 
   // Client-side filtering on monitoring cases table
@@ -205,11 +221,11 @@ function FraudDashboard() {
 
           <div className="admin-kpi-card kpi-approved">
             <div className="kpi-header">
-              <span className="kpi-label">Approved (Low Risk)</span>
-              <span className="kpi-pill kpi-pill-success">{stats.lowPct}%</span>
+              <span className="kpi-label">Approved Transactions</span>
+              <span className="kpi-pill kpi-pill-success">{stats.autoApprovalPct}% auto</span>
             </div>
             <div className="kpi-value-row">
-              <span className="kpi-value text-success">{stats.low.toLocaleString()}</span>
+              <span className="kpi-value text-success">{stats.approved.toLocaleString()}</span>
               <div className="kpi-icon-wrap icon-success" aria-hidden="true">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
@@ -217,16 +233,16 @@ function FraudDashboard() {
                 </svg>
               </div>
             </div>
-            <p className="kpi-footer">Threshold score &le; 0.30 &middot; Auto-approved</p>
+            <p className="kpi-footer">Checkout status APPROVED, REVIEW_APPROVED, or ORDERED</p>
           </div>
 
           <div className="admin-kpi-card kpi-review">
             <div className="kpi-header">
-              <span className="kpi-label">Under Review (Medium)</span>
-              <span className="kpi-pill kpi-pill-warning">{stats.medPct}%</span>
+              <span className="kpi-label">Under Admin Review</span>
+              <span className="kpi-pill kpi-pill-warning">{stats.reviewQueuePct}%</span>
             </div>
             <div className="kpi-value-row">
-              <span className="kpi-value text-warning">{stats.med.toLocaleString()}</span>
+              <span className="kpi-value text-warning">{stats.pendingReview.toLocaleString()}</span>
               <div className="kpi-icon-wrap icon-warning" aria-hidden="true">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <circle cx="12" cy="12" r="10" />
@@ -235,16 +251,16 @@ function FraudDashboard() {
                 </svg>
               </div>
             </div>
-            <p className="kpi-footer">0.30 &lt; score &le; 0.70 &middot; Requires admin action</p>
+            <p className="kpi-footer">Checkout status REVIEW with no admin decision recorded</p>
           </div>
 
           <div className="admin-kpi-card kpi-blocked">
             <div className="kpi-header">
-              <span className="kpi-label">Blocked (High Risk)</span>
-              <span className="kpi-pill kpi-pill-danger">{stats.highPct}%</span>
+              <span className="kpi-label">System Blocked</span>
+              <span className="kpi-pill kpi-pill-danger">{stats.preventionPct}%</span>
             </div>
             <div className="kpi-value-row">
-              <span className="kpi-value text-danger">{stats.high.toLocaleString()}</span>
+              <span className="kpi-value text-danger">{stats.blocked.toLocaleString()}</span>
               <div className="kpi-icon-wrap icon-danger" aria-hidden="true">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <circle cx="12" cy="12" r="10" />
@@ -252,7 +268,7 @@ function FraudDashboard() {
                 </svg>
               </div>
             </div>
-            <p className="kpi-footer">Score &gt; 0.70 &middot; Auto-rejected at gateway</p>
+            <p className="kpi-footer">Terminal checkout status BLOCKED; pending REVIEW is excluded</p>
           </div>
         </div>
       ) : summaryLoaded ? null : (
@@ -266,19 +282,19 @@ function FraudDashboard() {
         <div className="card admin-distribution-card">
           <div className="admin-distribution-header">
             <div>
-              <h2 className="admin-card-title">Risk Distribution & Decision Breakdown</h2>
+              <h2 className="admin-card-title">Score Risk Distribution</h2>
               <p className="admin-card-description">
-                Overall classification balance derived from all assessed transactions.
+                Risk bands are derived from each saved score using the current thresholds; operational REVIEW can also apply independently.
               </p>
             </div>
             <div className="admin-distribution-legend">
-              <span className="legend-item"><span className="legend-dot dot-low" /> Approved ({stats.low})</span>
-              <span className="legend-item"><span className="legend-dot dot-medium" /> Under Review ({stats.med})</span>
-              <span className="legend-item"><span className="legend-dot dot-high" /> Blocked ({stats.high})</span>
+              <span className="legend-item"><span className="legend-dot dot-low" /> LOW ({stats.low})</span>
+              <span className="legend-item"><span className="legend-dot dot-medium" /> MEDIUM ({stats.med})</span>
+              <span className="legend-item"><span className="legend-dot dot-high" /> HIGH ({stats.high})</span>
             </div>
           </div>
 
-          <div className="admin-progress-track" title={`Approved: ${stats.lowPct}%, Review: ${stats.medPct}%, Blocked: ${stats.highPct}%`}>
+          <div className="admin-progress-track" title={`LOW: ${stats.lowPct}%, MEDIUM: ${stats.medPct}%, HIGH: ${stats.highPct}%`}>
             <div className="progress-seg seg-low" style={{ width: `${stats.lowPct}%` }} />
             <div className="progress-seg seg-medium" style={{ width: `${stats.medPct}%` }} />
             <div className="progress-seg seg-high" style={{ width: `${stats.highPct}%` }} />
@@ -287,15 +303,23 @@ function FraudDashboard() {
           <div className="admin-distribution-metrics">
             <div className="distribution-metric">
               <span className="dist-label">Auto-Approval Rate</span>
-              <strong className="dist-value text-success">{stats.lowPct}%</strong>
+              <strong className="dist-value text-success">{stats.autoApprovalPct}%</strong>
             </div>
             <div className="distribution-metric">
               <span className="dist-label">Manual Review Queue Rate</span>
-              <strong className="dist-value text-warning">{stats.medPct}%</strong>
+              <strong className="dist-value text-warning">{stats.reviewQueuePct}%</strong>
             </div>
             <div className="distribution-metric">
               <span className="dist-label">Automated Prevention Rate</span>
-              <strong className="dist-value text-danger">{stats.highPct}%</strong>
+              <strong className="dist-value text-danger">{stats.preventionPct}%</strong>
+            </div>
+            <div className="distribution-metric">
+              <span className="dist-label">Admin Rejections</span>
+              <strong className="dist-value text-danger">{stats.adminRejected.toLocaleString()}</strong>
+            </div>
+            <div className="distribution-metric">
+              <span className="dist-label">Admin Approvals</span>
+              <strong className="dist-value text-success">{stats.adminApproved.toLocaleString()}</strong>
             </div>
             <div className="distribution-metric">
               <span className="dist-label">Active Serving Model</span>
@@ -314,7 +338,7 @@ function FraudDashboard() {
           <div className="admin-toolbar-title-wrap">
             <h2 className="admin-card-title">Fraud Monitoring Cases</h2>
             <p className="admin-card-description">
-              Transactions evaluated with REVIEW or BLOCK model outcomes, or with an administrative decision recorded.
+              Transactions in the review or blocking workflow, shown with current score bands and separate operational status.
             </p>
           </div>
           <div className="admin-toolbar-controls">
@@ -368,7 +392,10 @@ function FraudDashboard() {
                 <th className="col-amount">Amount</th>
                 <th className="col-risk">Risk Level</th>
                 <th className="col-score">Risk Score</th>
-                <th className="col-decision">Model Decision</th>
+                <th className="col-score-outcome">Score Outcome</th>
+                <th className="col-orig-decision">Original Decision</th>
+                <th className="col-saved-assessment">Saved Assessment</th>
+                <th className="col-operational">Operational</th>
                 <th className="col-status">Checkout Status</th>
                 <th className="col-review">Admin Review</th>
                 <th className="col-model">Model Used</th>
@@ -379,7 +406,7 @@ function FraudDashboard() {
             <tbody>
               {filteredCases.length === 0 ? (
                 <tr>
-                  <td colSpan="11" className="admin-table-empty">
+                  <td colSpan="14" className="admin-table-empty">
                     {transactions.length === 0
                       ? 'No transactions currently meet the fraud monitoring filters.'
                       : 'No monitoring cases match your current search or risk filter.'}
@@ -413,9 +440,22 @@ function FraudDashboard() {
                       <td className="col-score font-tabular">
                         <span className="risk-score-value">{Number(t.fraudScore).toFixed(4)}</span>
                       </td>
-                      <td className="col-decision">
-                        <span className={`badge ${DECISION_CLASS[t.decision] || 'badge-neutral'}`}>
-                          {t.decision}
+                      <td className="col-score-outcome">
+                        <span className={`badge ${DECISION_CLASS[t.score_based_decision] || 'badge-neutral'}`}>
+                          {t.score_based_decision || '—'}
+                        </span>
+                      </td>
+                      <td className="col-orig-decision">
+                        <span className="decision-text">{t.decision || '—'}</span>
+                      </td>
+                      <td className="col-saved-assessment" title={t.classification_consistent ? 'Saved assessment matches current thresholds' : 'Saved historical values are preserved'}>
+                        <span className="saved-assessment-pill">
+                          {t.recorded_risk_level || '—'} / {t.recorded_score_based_decision || 'decision not recorded'}
+                        </span>
+                      </td>
+                      <td className="col-operational">
+                        <span className={`badge ${DECISION_CLASS[t.operational_decision] || 'badge-neutral'}`}>
+                          {t.operational_decision || '—'}
                         </span>
                       </td>
                       <td className="col-status">

@@ -12,6 +12,7 @@ class FraudPrediction(Base):
     fraud_probability = Column(Float)
     risk_level = Column(String) # LOW, MEDIUM, HIGH
     decision = Column(String)   # APPROVE, REVIEW, BLOCK
+    score_based_decision = Column(String, nullable=True)  # Score threshold outcome before checkout/review policy
     model_used = Column(String)
     
     created_at = Column(DateTime, default=datetime.datetime.utcnow)

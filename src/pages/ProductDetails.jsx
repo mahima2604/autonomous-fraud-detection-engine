@@ -64,7 +64,15 @@ function ProductDetails() {
       <div className="product-details-card card">
         {/* Left: Product Image Showcase */}
         <div className="product-details-media">
-          <img src={product.image} alt={product.name} className="product-main-image" />
+          <img
+            src={product.image}
+            alt={product.name}
+            className="product-main-image"
+            onError={(e) => {
+              e.currentTarget.onerror = null;
+              e.currentTarget.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='400' viewBox='0 0 400 400'%3E%3Crect width='400' height='400' fill='%23f1f5f9'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%2394a3b8' font-family='sans-serif' font-size='16'%3ENo Image Available%3C/text%3E%3C/svg%3E";
+            }}
+          />
           <div className="media-badge-strip">
             <span className="media-category-pill">{product.category}</span>
             <span className="media-verified-pill">

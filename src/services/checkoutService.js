@@ -2,20 +2,37 @@
 // Assembles the transaction payload the fraud + order services expect
 // from checkout-form data. Pure data shaping — no network calls here.
 
+export function getClientDeviceInfo() {
+  const ua = typeof navigator !== 'undefined' ? (navigator.userAgent || '') : '';
+  const isMobile = /Mobi|Android/i.test(ua);
+  const deviceType = isMobile ? 'mobile' : 'desktop';
+  const browserPlatform = typeof navigator !== 'undefined'
+    ? (navigator.userAgentData?.platform || navigator.platform || '')
+    : '';
+  const platform = String(browserPlatform).trim().toLowerCase();
+  let devicePlatformHint = 'UNKNOWN';
+  if (['windows', 'win32', 'win64'].includes(platform)) devicePlatformHint = 'Windows';
+  else if (['macos', 'mac os', 'macintel'].includes(platform)) devicePlatformHint = 'MacOS';
+  else if (['ios', 'iphone', 'ipad', 'ipod'].includes(platform)) devicePlatformHint = 'iOS';
+  else if (platform === 'android') devicePlatformHint = 'Android';
+  else if (platform === 'linux') devicePlatformHint = 'Linux';
+  return { deviceType, deviceInfo: devicePlatformHint, devicePlatformHint };
+}
+
 /**
  * Builds the transaction payload shared by fraud analysis and order
  * creation. Keeps a clear line between what the frontend can supply
  * and what only the backend can generate.
  */
 export function buildTransactionPayload({ user, amount, items = [], paymentMethod, shippingAddress, billingAddress }) {
+  const { deviceType, deviceInfo, devicePlatformHint } = getClientDeviceInfo();
   return {
     TransactionAmt: amount,
     // Extract domain from user if possible
     P_emaildomain: user?.email ? user.email.split('@')[1] : 'UNKNOWN',
-    
-    // A browser platform string is not a reliable device identifier for the model.
-    DeviceType: /Mobi|Android/i.test(navigator.userAgent) ? "mobile" : "desktop",
-    DeviceInfo: 'UNKNOWN',
+    DeviceType: deviceType,
+    DeviceInfo: deviceInfo,
+    DevicePlatformHint: devicePlatformHint,
     checkout_snapshot: {
       items: items.map((item) => ({ product_id: item.id, quantity: item.quantity })),
       payment_method: paymentMethod,
@@ -30,6 +47,9 @@ function toBackendAddress(address = {}) {
     full_name: address.fullName,
     line1: address.line1,
     city: address.city,
+    locality: address.locality || '',
+    state: address.state || '',
+    address_confirmed: address.addressConfirmed === true,
     postal_code: address.postalCode,
     country: address.country,
   };

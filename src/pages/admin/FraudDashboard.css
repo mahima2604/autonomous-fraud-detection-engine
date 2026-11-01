@@ -467,7 +467,7 @@
 
 .admin-table {
   width: 100%;
-  min-width: 1230px; /* Predictable width for 11 columns, contained within scroll wrapper */
+  min-width: 1860px;
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
@@ -482,9 +482,10 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 12px 12px;
+  padding: 12px 14px;
   border-bottom: 1px solid #e2e8f0;
   white-space: nowrap;
+  box-sizing: border-box;
 }
 
 /* Ensure first column has plenty of padding and never clips */
@@ -500,11 +501,12 @@
 }
 
 .admin-table td {
-  padding: 12px 12px;
+  padding: 12px 14px;
   border-bottom: 1px solid #f1f5f9;
   vertical-align: middle;
   white-space: nowrap;
   color: #1e293b;
+  box-sizing: border-box;
 }
 
 .admin-table tbody tr {
@@ -519,18 +521,42 @@
   background-color: #eff6ff;
 }
 
-/* Specific column styles */
-.col-id { width: 125px; }
-.col-customer { width: 160px; }
-.col-amount { width: 90px; }
-.col-risk { width: 115px; }
-.col-score { width: 85px; }
-.col-decision { width: 105px; }
-.col-status { width: 125px; }
-.col-review { width: 130px; }
-.col-model { width: 130px; }
-.col-time { width: 140px; }
-.col-action { width: 125px; text-align: right; }
+/* Specific column styles with ample, non-overlapping widths */
+.col-id { width: 135px; min-width: 135px; }
+.col-customer { width: 180px; min-width: 180px; }
+.col-amount { width: 105px; min-width: 105px; }
+.col-risk { width: 135px; min-width: 135px; }
+.col-score { width: 100px; min-width: 100px; }
+.col-score-outcome { width: 135px; min-width: 135px; }
+.col-orig-decision { width: 140px; min-width: 140px; }
+.col-saved-assessment { width: 175px; min-width: 175px; }
+.col-operational { width: 155px; min-width: 155px; }
+.col-status { width: 140px; min-width: 140px; }
+.col-review { width: 150px; min-width: 150px; }
+.col-model { width: 125px; min-width: 125px; }
+.col-time { width: 165px; min-width: 165px; }
+.col-action { width: 120px; min-width: 120px; text-align: right; }
+
+.decision-text {
+  font-weight: 600;
+  color: #334155;
+  font-size: 12px;
+}
+
+.saved-assessment-pill {
+  display: inline-block;
+  padding: 3px 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #475569;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .admin-txn-id {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;

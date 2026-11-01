@@ -20,7 +20,15 @@ function ProductCard({ product }) {
   return (
     <div className="product-card card">
       <Link to={`/products/${product.id}`} className="product-card-image-link" aria-label={`View details for ${product.name}`}>
-        <img src={product.image} alt={product.name} loading="lazy" />
+        <img
+          src={product.image}
+          alt={product.name}
+          loading="lazy"
+          onError={(e) => {
+            e.currentTarget.onerror = null;
+            e.currentTarget.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' fill='%23f1f5f9'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%2394a3b8' font-family='sans-serif' font-size='14'%3ENo Image%3C/text%3E%3C/svg%3E";
+          }}
+        />
         <span className="product-badge-overlay">{product.category}</span>
       </Link>
 

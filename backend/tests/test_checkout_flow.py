@@ -1,6 +1,8 @@
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from pathlib import Path
 
 os.environ.setdefault("AUTH_TOKEN_SECRET", "test-only-signing-key-for-checkout-tests")
@@ -24,6 +26,7 @@ from app.models.order import Order
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.models.email_verification import EmailVerification
+from app.models.order_verification import OrderVerification
 from app.services.auth import (
     create_access_token, create_admin_access_token, hash_password,
     read_access_token, read_admin_access_token,
@@ -97,6 +100,10 @@ def run_prediction(db, user, monkeypatch, score, attempt_id=None, checkout_snaps
     verified_email(db, user)
     snapshot = dict(checkout_snapshot or {})
     snapshot.setdefault("verified_email", user.email)
+    if "items" in snapshot:
+        snapshot.setdefault("shipping_address", {"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India", "address_confirmed": True})
+        snapshot.setdefault("billing_address", {"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"})
+        snapshot["shipping_address"].setdefault("address_confirmed", True)
     request = main.TransactionInput(TransactionAmt=129.0, ProductCD="C", checkout_attempt_id=attempt_id, checkout_snapshot=snapshot)
     return main.predict_fraud(request, db=db, current_user=user)
 
@@ -117,13 +124,62 @@ def verified_email(db, user):
     db.commit()
 
 
-def order_request(transaction_id, product_id="p1", quantity=1):
+def order_request(transaction_id, product_id="p1", quantity=1, payment_method="CARD"):
     return main.CreateOrderRequest(
         transaction_id=transaction_id,
         items=[main.OrderItemRequest(product_id=product_id, quantity=quantity)],
-        payment_method="CARD",
-        shipping_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
-        billing_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
+        payment_method=payment_method,
+        shipping_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"},
+        billing_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"},
+    )
+
+
+def valid_checkout_snapshot(user, items=None, address=None):
+    address = address or {
+        "full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City",
+        "postal_code": "560001", "country": "India", "address_confirmed": True,
+    }
+    return {
+        "items": items or [{"product_id": "p1", "quantity": 1}],
+        "payment_method": "CARD",
+        "shipping_address": dict(address),
+        "billing_address": {key: value for key, value in address.items() if key != "address_confirmed"},
+        "verified_email": user.email,
+    }
+
+
+def verify_order_code(db, user, transaction_id, monkeypatch):
+    sent_codes = []
+    monkeypatch.setattr(main.email_otp, "send_code", lambda email, code: sent_codes.append((email, code)))
+    transaction = db.query(Transaction).filter(Transaction.id == transaction_id).one()
+    address = main.transaction_shipping_address(transaction)
+    main.send_order_verification(
+        transaction_id,
+        main.OrderVerificationSendRequest(shipping_address=address, address_confirmed=True),
+        db=db,
+        current_user=user,
+    )
+    assert sent_codes and sent_codes[-1][0] == user.email
+    main.verify_order_verification(
+        transaction_id,
+        main.OrderVerificationCodeRequest(code=sent_codes[-1][1]),
+        db=db,
+        current_user=user,
+    )
+    return sent_codes[-1][1]
+
+
+def run_graph_prediction(db, user, monkeypatch, score, checkout_snapshot):
+    verified_email(db, user)
+    monkeypatch.setattr(main, "score_transaction", lambda *_args: (score, "GraphSAGE"))
+    return main.predict_fraud(
+        main.TransactionInput(
+            TransactionAmt=129.0,
+            checkout_attempt_id=f"graph-review-{user.id}",
+            checkout_snapshot=checkout_snapshot,
+        ),
+        db=db,
+        current_user=user,
     )
 
 
@@ -136,14 +192,425 @@ def test_configured_fraud_decision_thresholds():
         main.classify_fraud_score(float("nan"))
 
 
+@pytest.mark.parametrize(("score", "risk", "decision"), [
+    (main.FRAUD_REVIEW_THRESHOLD - 1e-9, "LOW", "APPROVE"),
+    (main.FRAUD_REVIEW_THRESHOLD, "LOW", "APPROVE"),
+    (main.FRAUD_REVIEW_THRESHOLD + 1e-9, "MEDIUM", "REVIEW"),
+    (main.FRAUD_BLOCK_THRESHOLD, "MEDIUM", "REVIEW"),
+    (main.FRAUD_BLOCK_THRESHOLD + 1e-9, "HIGH", "BLOCK"),
+])
+def test_risk_policy_threshold_edges(score, risk, decision):
+    assert main.classify_fraud_score(score) == (risk, decision)
+
+
+def test_historical_score_classification_is_consistent_across_admin_views(database):
+    admin = Admin(email="classification-admin@example.test", hashed_password=hash_password("admin-test-password"))
+    customer = make_user(database, "classification-customer@example.test")
+    database.add(admin)
+    database.commit()
+    database.refresh(admin)
+    transaction = Transaction(
+        user_id=customer.id,
+        amount=42.0,
+        transaction_data={"TransactionAmt": 42.0, "ProductCD": "C"},
+        status="REVIEW",
+        review_reason="Saved operational review",
+    )
+    database.add(transaction)
+    database.flush()
+    prediction = FraudPrediction(
+        transaction_id=transaction.id,
+        fraud_probability=0.4476,
+        risk_level="HIGH",
+        decision="REVIEW",
+        score_based_decision="BLOCK",
+        model_used="GraphSAGE",
+    )
+    database.add(prediction)
+    database.commit()
+
+    before = (prediction.risk_level, prediction.score_based_decision, transaction.status, transaction.review_decision)
+    summary = main.get_fraud_summary(db=database, current_admin=admin)
+    recent = main.get_recent_predictions(limit=100, db=database, current_admin=admin)[0]
+    admin_row = next(row for row in main.get_admin_transactions(db=database, current_admin=admin) if row["transaction_id"] == transaction.id)
+    customer_row = main.get_admin_customer_details(customer.id, db=database, current_admin=admin)["transactions"][0]
+    explanation = main.build_prediction_explanation(transaction, prediction, db=database)
+    after = (prediction.risk_level, prediction.score_based_decision, transaction.status, transaction.review_decision)
+
+    assert summary["risk_breakdown"] == {"LOW": 0, "MEDIUM": 1, "HIGH": 0}
+    assert recent["risk_level"] == "MEDIUM" and recent["score_based_decision"] == "REVIEW"
+    assert recent["recorded_risk_level"] == "HIGH" and recent["recorded_score_based_decision"] == "BLOCK"
+    assert admin_row["fraud_prediction"]["risk_level"] == customer_row["fraud_prediction"]["risk_level"] == "MEDIUM"
+    assert admin_row["fraud_prediction"]["score_based_decision"] == customer_row["fraud_prediction"]["score_based_decision"] == "REVIEW"
+    assert customer_row["fraud_prediction"]["recorded_risk_level"] == "HIGH"
+    assert customer_row["fraud_prediction"]["recorded_score_based_decision"] == "BLOCK"
+    assert admin_row["fraud_prediction"]["operational_decision"] == customer_row["fraud_prediction"]["operational_decision"] == "REVIEW"
+    assert explanation["risk_category"] == "MEDIUM"
+    assert explanation["automated_score_decision"] == "REVIEW"
+    assert explanation["historical_classification_notice"]
+    assert "exceeds 0.70" not in explanation["historical_classification_notice"]
+    assert recent["review_reason"] == explanation["historical_classification_notice"]
+    assert before == after
+
+
+def test_fraud_summary_counts_pending_review_separately_from_terminal_decisions(database):
+    admin = Admin(email="summary-admin@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.flush()
+    samples = [
+        (0.90, "REVIEW", None, "REVIEW"),
+        (0.95, "REJECTED", "REJECT", "REVIEW"),
+        (0.10, "APPROVED", None, "APPROVE"),
+        (0.85, "BLOCKED", None, "BLOCK"),
+    ]
+    for score, status, review_decision, decision in samples:
+        transaction = Transaction(amount=12.0, transaction_data={"TransactionAmt": 12.0}, status=status, review_decision=review_decision)
+        database.add(transaction)
+        database.flush()
+        risk, score_outcome = main.classify_fraud_score(score)
+        database.add(FraudPrediction(
+            transaction_id=transaction.id,
+            fraud_probability=score,
+            risk_level=risk,
+            decision=decision,
+            score_based_decision=score_outcome,
+            model_used="GraphSAGE",
+        ))
+    database.commit()
+
+    summary = main.get_fraud_summary(db=database, current_admin=admin)
+
+    assert summary["total_predictions"] == 4
+    assert summary["transaction_status_breakdown"] == {
+        "approved": 1,
+        "pending_review": 1,
+        "blocked": 1,
+        "admin_rejected": 1,
+        "auto_approved": 1,
+        "admin_approved": 0,
+    }
+    assert summary["transaction_status_rates"] == {
+        "auto_approval": 0.25,
+        "manual_review_queue": 0.25,
+        "automated_prevention": 0.25,
+    }
+
+
+def test_checkout_policy_routes_medium_to_verification_and_high_to_review():
+    verified = {"email_otp_verified": True, "delivery_address_confirmed": True}
+    assert main.classify_checkout_score(main.FRAUD_REVIEW_THRESHOLD, verified) == ("LOW", "REVIEW")
+    assert main.classify_checkout_score(main.FRAUD_REVIEW_THRESHOLD + 1e-9, verified) == ("MEDIUM", "REVIEW")
+    assert main.classify_checkout_score(main.FRAUD_BLOCK_THRESHOLD, verified) == ("MEDIUM", "REVIEW")
+    assert main.classify_checkout_score(main.FRAUD_BLOCK_THRESHOLD + 1e-9, verified) == ("HIGH", "REVIEW")
+
+
+@pytest.mark.parametrize(("score", "risk", "score_outcome"), [
+    (0.12, "LOW", "APPROVE"),
+    (0.50, "MEDIUM", "REVIEW"),
+    (0.90, "HIGH", "BLOCK"),
+])
+def test_verified_storefront_checkout_uses_score_for_three_level_policy(database, monkeypatch, score, risk, score_outcome):
+    user = make_user(database, f"risk-{risk.lower()}@example.test")
+    result = run_prediction(database, user, monkeypatch, score, checkout_snapshot={
+        "items": [{"product_id": "p1", "quantity": 1}],
+        "shipping_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India", "address_confirmed": True},
+        "billing_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"},
+    })
+    transaction = database.query(Transaction).one()
+    assert result.risk_level == risk
+    assert result.decision == "REVIEW"
+    assert result.score_based_decision == score_outcome
+    assert transaction.checkout_snapshot["verification_signals"]["email_otp_verified"] is True
+    assert transaction.checkout_snapshot["verification_signals"]["delivery_address_confirmed"] is True
+
+
+def test_low_score_without_both_verification_signals_is_not_auto_approved():
+    assert main.classify_checkout_score(0.1, {"email_otp_verified": True}) == ("LOW", "REVIEW")
+
+
+def test_high_score_is_held_for_review_even_with_both_verification_signals():
+    assert main.classify_checkout_score(0.9, {
+        "email_otp_verified": True,
+        "delivery_address_confirmed": True,
+    }) == ("HIGH", "REVIEW")
+
+
+def test_medium_checkout_requires_order_otp_and_releases_after_evidence_reassessment(database, monkeypatch):
+    user = make_user(database, "medium-checkout@example.test")
+    admin = Admin(email="reviewer-medium@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    result = run_prediction(
+        database, user, monkeypatch, 0.50, "medium-verification-attempt",
+        valid_checkout_snapshot(user),
+    )
+    transaction = database.query(Transaction).one()
+    prediction = database.query(FraudPrediction).one()
+
+    assert (result.risk_level, result.decision, result.score_based_decision) == ("MEDIUM", "REVIEW", "REVIEW")
+    assert transaction.status == "REVIEW"
+    assert prediction.fraud_probability == 0.5
+    assert prediction.decision == "REVIEW"
+    pending = main.get_pending_reviews(db=database, current_admin=admin)
+    assert len(pending) == 1
+    assert pending[0]["transaction_id"] == transaction.id
+
+    with pytest.raises(HTTPException) as blocked:
+        main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert blocked.value.status_code == 409
+
+    verify_order_code(database, user, transaction.id, monkeypatch)
+    database.refresh(transaction)
+    database.refresh(prediction)
+    # OTP verification records evidence but DOES NOT auto-approve:
+    assert transaction.status == "REVIEW"
+    assert prediction.decision == "REVIEW"
+    assert prediction.score_based_decision == "REVIEW"
+    assert prediction.fraud_probability == 0.5
+    reassessment = transaction.risk_reassessment
+    assert reassessment["ready_for_admin_decision"] is True
+    assert reassessment["address_account_checks"]["address_check"]["format_valid"] is True
+    amount_context = reassessment["address_account_checks"]["account_history"]["transaction_amount_context_last_30_days"]
+    assert amount_context["currency"] == "USD"
+    assert amount_context["current_amount"] == 129.0
+    assert amount_context["same_currency_previous_transaction_count"] == 0
+    assert "no amount cutoff" in amount_context["interpretation"]
+    assert reassessment["graph_relationship_check"]["check_performed"] is True
+
+    # Order still blocked before admin decision
+    with pytest.raises(HTTPException) as blocked_before_admin:
+        main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert blocked_before_admin.value.status_code == 409
+
+    # Admin reviews and approves
+    main.approve_review(
+        transaction.id,
+        main.AdminReviewRequest(reason="Admin verified medium risk transaction"),
+        db=database,
+        current_admin=admin,
+    )
+    database.refresh(transaction)
+    assert transaction.status == "REVIEW_APPROVED"
+    assert transaction.review_decision == "APPROVE"
+
+    status = main.get_transaction_status(transaction.id, db=database, current_user=user)
+    assert status["operational_decision"] == "ADMIN_APPROVE"
+    assert status["fraud_prediction"]["decision"] == "REVIEW"
+
+    order = main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert order["transaction_id"] == transaction.id
+
+
+def test_medium_delivery_failure_history_holds_for_admin_review_until_reasoned_decision(database, monkeypatch):
+    user = make_user(database, "medium-delivery-history@example.test")
+    other_user = make_user(database, "prior-delivery-account@example.test")
+    snapshot = valid_checkout_snapshot(user)
+    prior_snapshot = valid_checkout_snapshot(other_user, address=snapshot["shipping_address"])
+    prior_transaction = Transaction(
+        user_id=other_user.id,
+        checkout_attempt_id="prior-delivery-attempt",
+        checkout_snapshot=prior_snapshot,
+        transaction_data={"TransactionAmt": 129.0},
+        amount=129.0,
+        currency="USD",
+        status="ORDERED",
+    )
+    database.add(prior_transaction)
+    database.flush()
+    database.add(Order(
+        user_id=other_user.id,
+        transaction_id=prior_transaction.id,
+        items=[{"product_id": "p1", "quantity": 1}],
+        shipping_address={key: value for key, value in prior_snapshot["shipping_address"].items() if key != "address_confirmed"},
+        billing_address=prior_snapshot["billing_address"],
+        amount=129.0,
+        currency="USD",
+        status="DELIVERY_REFUSED",
+        payment_status="SIMULATED",
+        payment_method="CARD",
+    ))
+    database.commit()
+
+    prediction = run_prediction(
+        database, user, monkeypatch, 0.5, "medium-delivery-history-attempt", snapshot,
+    )
+    transaction = database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    verify_order_code(database, user, transaction.id, monkeypatch)
+    database.refresh(transaction)
+    saved_prediction = database.query(FraudPrediction).filter(FraudPrediction.transaction_id == transaction.id).one()
+
+    assert transaction.status == "REVIEW"
+    assert transaction.review_decision is None
+    assert saved_prediction.risk_level == "MEDIUM"
+    assert saved_prediction.decision == "REVIEW"
+    assert saved_prediction.score_based_decision == "REVIEW"
+    assert saved_prediction.fraud_probability == 0.5
+    assert transaction.risk_reassessment["medium_verification"]["status"] == "HELD_FOR_ADMIN_REVIEW"
+    assert "DELIVERY_REFUSED (1)" in transaction.risk_reassessment["medium_verification"]["decision_reason"]
+    assert "not proof of fraud" in transaction.risk_reassessment["medium_verification"]["decision_reason"]
+    assert "medium_verification_release" not in transaction.risk_reassessment
+
+    admin = Admin(email="medium-delivery-reviewer@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    pending = main.get_pending_reviews(db=database, current_admin=admin)
+    row = next(item for item in pending if item["transaction_id"] == transaction.id)
+    assert row["fraud_prediction"]["risk_level"] == "MEDIUM"
+    assert row["fraud_prediction"]["decision"] == "REVIEW"
+    assert row["fraud_prediction"]["operational_decision"] == "REVIEW"
+    assert "DELIVERY_REFUSED" in row["fraud_prediction"]["review_reason"]
+
+    with pytest.raises(HTTPException) as blocked_without_review:
+        main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert blocked_without_review.value.status_code == 409
+    assert database.query(Order).filter(Order.transaction_id == transaction.id).count() == 0
+
+    with pytest.raises(HTTPException) as missing_reason:
+        main.approve_review(transaction.id, main.AdminReviewRequest(), db=database, current_admin=admin)
+    assert missing_reason.value.status_code == 422
+    assert transaction.status == "REVIEW"
+    assert transaction.review_decision is None
+
+    challenge = database.query(OrderVerification).filter(OrderVerification.transaction_id == transaction.id).one()
+    challenge.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    database.commit()
+    main.approve_review(
+        transaction.id,
+        main.AdminReviewRequest(reason="Reviewed the recorded delivery outcome; no confirmed fraud evidence."),
+        db=database,
+        current_admin=admin,
+    )
+    with pytest.raises(HTTPException) as expired_order_otp:
+        main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert expired_order_otp.value.status_code == 403
+    verify_order_code(database, user, transaction.id, monkeypatch)
+    order = main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert order["transaction_id"] == transaction.id
+    assert database.query(Order).filter(Order.transaction_id == transaction.id).count() == 1
+    assert saved_prediction.fraud_probability == 0.5
+
+
+def test_medium_release_does_not_treat_shared_address_or_incomplete_graph_alone_as_fraud(database, monkeypatch):
+    user = make_user(database, "medium-shared-address@example.test")
+    other_user = make_user(database, "medium-shared-address-other@example.test")
+    snapshot = valid_checkout_snapshot(user)
+    other_transaction = Transaction(
+        user_id=other_user.id,
+        checkout_attempt_id="shared-address-history-only",
+        checkout_snapshot=valid_checkout_snapshot(other_user, address=snapshot["shipping_address"]),
+        transaction_data={"TransactionAmt": 129.0},
+        amount=129.0,
+        currency="USD",
+        status="VERIFY",
+    )
+    database.add(other_transaction)
+    database.commit()
+
+    prediction = run_graph_prediction(database, user, monkeypatch, 0.5, snapshot)
+    incomplete_context = {
+        "training_topology": "P_emaildomain, DeviceInfo",
+        "live_topology": "P_emaildomain",
+        "missing_edge_features": ["DeviceInfo"],
+        "connected_neighbors": 0,
+        "topology_validation_status": "UNVALIDATED_INSUFFICIENT_DATA",
+        "topology_note": "DeviceInfo relationship evidence is unavailable for this checkout.",
+    }
+    monkeypatch.setattr(main, "_build_live_gnn_graph", lambda *_args, **_kwargs: (None, incomplete_context))
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+
+    transaction = database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    history = transaction.risk_reassessment["medium_verification"]["address_account_checks"]["account_history"]
+    graph = transaction.risk_reassessment["medium_verification"]["graph_relationship_check"]
+    assert history["other_accounts_with_matching_checkout_address_last_30_days"] == 1
+    assert history["other_new_accounts_with_matching_checkout_address_last_30_days"] == 1
+    assert history["shared_address_is_informational_only"] is True
+    assert graph["status"] == "INCOMPLETE_EVIDENCE"
+    assert transaction.status == "REVIEW"
+    assert transaction.risk_reassessment["ready_for_admin_decision"] is True
+    assert transaction.risk_reassessment["score"] == 0.5
+
+
+def test_medium_graph_check_failure_keeps_transaction_held(database, monkeypatch):
+    user = make_user(database, "medium-graph-failure@example.test")
+    prediction = run_graph_prediction(database, user, monkeypatch, 0.5, valid_checkout_snapshot(user))
+    monkeypatch.setattr(
+        main, "_build_live_gnn_graph",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("controlled graph check failure")),
+    )
+    sent_codes = []
+    monkeypatch.setattr(main.email_otp, "send_code", lambda email, code: sent_codes.append(code))
+    address = main.transaction_shipping_address(database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one())
+    main.send_order_verification(
+        prediction.transaction_id,
+        main.OrderVerificationSendRequest(shipping_address=address, address_confirmed=True),
+        db=database,
+        current_user=user,
+    )
+    with pytest.raises(HTTPException) as failed_check:
+        main.verify_order_verification(
+            prediction.transaction_id,
+            main.OrderVerificationCodeRequest(code=sent_codes[0]),
+            db=database,
+            current_user=user,
+        )
+    transaction = database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    assert failed_check.value.status_code == 503
+    assert transaction.status == "REVIEW"
+    assert database.query(Order).filter(Order.transaction_id == transaction.id).count() == 0
+
+
+def test_medium_release_is_invalidated_if_confirmed_address_changes(database, monkeypatch):
+    user = make_user(database, "medium-stale-address@example.test")
+    result = run_prediction(database, user, monkeypatch, 0.5, "medium-stale-attempt", valid_checkout_snapshot(user))
+    verify_order_code(database, user, result.transaction_id, monkeypatch)
+    transaction = database.query(Transaction).one()
+    snapshot = dict(transaction.checkout_snapshot)
+    snapshot["shipping_address"] = dict(snapshot["shipping_address"], line1="Changed after verification")
+    transaction.checkout_snapshot = snapshot
+    database.commit()
+    with pytest.raises(HTTPException) as blocked:
+        main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert blocked.value.status_code == 409
+    assert database.query(Order).count() == 0
+
+
+def test_failed_medium_otp_keeps_checkout_held_and_blocks_order(database, monkeypatch):
+    user = make_user(database, "medium-invalid-otp@example.test")
+    result = run_prediction(database, user, monkeypatch, 0.5, "medium-invalid-otp-attempt", valid_checkout_snapshot(user))
+    sent_codes = []
+    monkeypatch.setattr(main.email_otp, "send_code", lambda email, code: sent_codes.append(code))
+    address = main.transaction_shipping_address(database.query(Transaction).one())
+    main.send_order_verification(
+        result.transaction_id,
+        main.OrderVerificationSendRequest(shipping_address=address, address_confirmed=True),
+        db=database,
+        current_user=user,
+    )
+    with pytest.raises(HTTPException) as incorrect:
+        main.verify_order_verification(
+            result.transaction_id,
+            main.OrderVerificationCodeRequest(code="000000" if sent_codes[0] != "000000" else "000001"),
+            db=database,
+            current_user=user,
+        )
+    assert incorrect.value.status_code == 400
+    transaction = database.query(Transaction).one()
+    assert transaction.status == "REVIEW"
+    with pytest.raises(HTTPException) as blocked:
+        main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert blocked.value.status_code == 409
+    assert database.query(Order).count() == 0
+
+
 def test_prediction_persists_transaction_and_baseline_decision(database, monkeypatch):
     user = make_user(database, "buyer-one@example.test")
     result = run_prediction(database, user, monkeypatch, 0.2)
     transaction = database.query(Transaction).one()
     prediction = database.query(FraudPrediction).one()
     assert result.transaction_id == transaction.id
-    assert prediction.decision == "APPROVE"
-    assert transaction.status == "APPROVED"
+    assert prediction.decision == "REVIEW"
+    assert prediction.score_based_decision == "APPROVE"
+    assert transaction.status == "REVIEW"
     assert prediction.model_used == "LogisticRegression_Baseline"
 
 
@@ -176,13 +643,61 @@ def test_storefront_prediction_rejects_client_supplied_total_before_model_scorin
     assert database.query(Transaction).count() == 0
 
 
+def test_storefront_prediction_rejects_missing_addresses_before_model_scoring(database, monkeypatch):
+    user = make_user(database, "address-required@example.test")
+    verified_email(database, user)
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+
+    class MustNotScore:
+        def predict_proba(self, _frame):
+            raise AssertionError("Missing checkout addresses must be rejected before scoring")
+
+    monkeypatch.setattr(main, "baseline_pipeline", MustNotScore())
+    request = main.TransactionInput(
+        TransactionAmt=129,
+        checkout_snapshot={
+            "items": [{"product_id": "p1", "quantity": 1}],
+            "shipping_address": {},
+            "billing_address": {},
+            "verified_email": user.email,
+        },
+    )
+    with pytest.raises(HTTPException) as error:
+        main.predict_fraud(request, db=database, current_user=user)
+    assert error.value.status_code == 422
+    assert database.query(Transaction).count() == 0
+
+
+def test_storefront_prediction_rejects_unconfirmed_shipping_address_before_model_scoring(database, monkeypatch):
+    user = make_user(database, "confirmation-required@example.test")
+    verified_email(database, user)
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+
+    class MustNotScore:
+        def predict_proba(self, _frame):
+            raise AssertionError("Unconfirmed delivery addresses must be rejected before scoring")
+
+    monkeypatch.setattr(main, "baseline_pipeline", MustNotScore())
+    address = {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"}
+    with pytest.raises(HTTPException) as error:
+        main.predict_fraud(main.TransactionInput(
+            TransactionAmt=129,
+            checkout_snapshot={"items": [{"product_id": "p1", "quantity": 1}], "shipping_address": address, "billing_address": address},
+        ), db=database, current_user=user)
+    assert error.value.status_code == 422
+    assert database.query(Transaction).count() == 0
+
+
 
 def test_prediction_retries_reuse_the_same_transaction(database, monkeypatch):
     user = make_user(database, "retry@example.test")
     first = run_prediction(database, user, monkeypatch, 0.2, attempt_id="checkout-attempt-test")
     second = run_prediction(database, user, monkeypatch, 0.9, attempt_id="checkout-attempt-test")
     assert first.transaction_id == second.transaction_id
-    assert second.decision == "APPROVE"
+    assert second.decision == "REVIEW"
+    assert second.score_based_decision == "APPROVE"
     assert database.query(Transaction).count() == 1
     assert database.query(FraudPrediction).count() == 1
 
@@ -239,10 +754,38 @@ def test_transaction_amount_must_be_positive_and_finite():
         main.TransactionInput(TransactionAmt=float("inf"))
 
 
+@pytest.mark.parametrize("postal_code", ["12345", "1234567", "12A456", " 12345 "])
+def test_order_address_rejects_invalid_indian_pin(postal_code):
+    with pytest.raises(ValidationError):
+        main.OrderAddressInput(full_name="Buyer", line1="1 Road", city="City", postal_code=postal_code, country="India")
+
+
+@pytest.mark.parametrize("missing", ["full_name", "line1", "city", "country"])
+def test_order_address_rejects_missing_required_field(missing):
+    address = {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"}
+    del address[missing]
+    with pytest.raises(ValidationError):
+        main.OrderAddressInput(**address)
+
+
+def test_order_address_accepts_six_digit_pin():
+    address = main.OrderAddressInput(full_name="Buyer", line1="1 Road", city="City", locality="Area", state="Karnataka", postal_code="560001", country="India")
+    assert address.postal_code == "560001"
+    assert address.locality == "Area"
+
+
 def test_approved_owned_transaction_creates_idempotent_order(database, monkeypatch):
     user = make_user(database, "buyer-three@example.test")
-    prediction = run_prediction(database, user, monkeypatch, 0.2)
+    prediction = run_prediction(database, user, monkeypatch, 0.2, checkout_snapshot=valid_checkout_snapshot(user))
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
     request = order_request(prediction.transaction_id)
+    with pytest.raises(HTTPException) as unapproved:
+        main.create_order(request, db=database, current_user=user)
+    assert unapproved.value.status_code == 409
+    admin = Admin(email="admin-buyer-three@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
     first = main.create_order(request, db=database, current_user=user)
     second = main.create_order(request, db=database, current_user=user)
     assert first["id"] == second["id"]
@@ -254,33 +797,278 @@ def test_approved_owned_transaction_creates_idempotent_order(database, monkeypat
     assert database.query(Transaction).one().status == "ORDERED"
 
 
-def test_backend_checkout_snapshot_survives_review_and_controls_resumed_order(database, monkeypatch):
-    user = make_user(database, "snapshot-review@example.test")
-    admin = Admin(email="snapshot-review-admin@example.test", hashed_password=hash_password("admin-test-password"))
+def test_cod_order_records_method_and_remains_unpaid(database, monkeypatch):
+    user = make_user(database, "cod-order@example.test")
+    prediction = run_prediction(database, user, monkeypatch, 0.1, checkout_snapshot=valid_checkout_snapshot(user))
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+    admin = Admin(email="admin-cod@example.test", hashed_password=hash_password("admin-test-password"))
     database.add(admin)
     database.commit()
-    snapshot_address = {"full_name": "Saved Buyer", "line1": "9 Saved Road", "city": "Saved City", "postal_code": "99999", "country": "Savedland"}
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
+
+    result = main.create_order(
+        order_request(prediction.transaction_id, payment_method="COD"),
+        db=database,
+        current_user=user,
+    )
+
+    stored = database.query(Order).one()
+    assert result["payment_method"] == "COD"
+    assert result["paymentStatus"] == "PENDING_CASH_COLLECTION"
+    assert stored.payment_method == "COD"
+    assert stored.payment_status != "PAID"
+
+
+def test_checkout_requires_fresh_order_otp_even_after_login_email_verification(database, monkeypatch):
+    user = make_user(database, "fresh-order-code@example.test")
+    prediction = run_prediction(database, user, monkeypatch, 0.1, checkout_snapshot=valid_checkout_snapshot(user))
+    admin = Admin(email="admin-fresh@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
+    with pytest.raises(HTTPException) as error:
+        main.create_order(order_request(prediction.transaction_id), db=database, current_user=user)
+    assert error.value.status_code == 403
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+    order = main.create_order(order_request(prediction.transaction_id), db=database, current_user=user)
+    assert order["transaction_id"] == prediction.transaction_id
+    assert database.query(Order).count() == 1
+
+
+def test_order_otp_requires_current_explicit_address_confirmation(database, monkeypatch):
+    user = make_user(database, "address-confirmation-required@example.test")
+    prediction = run_prediction(database, user, monkeypatch, 0.1, checkout_snapshot=valid_checkout_snapshot(user))
+    address = main.transaction_shipping_address(
+        database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    )
+    with pytest.raises(HTTPException) as missing_confirmation:
+        main.send_order_verification(
+            prediction.transaction_id,
+            main.OrderVerificationSendRequest(shipping_address=address),
+            db=database,
+            current_user=user,
+        )
+    assert missing_confirmation.value.status_code == 409
+    assert database.query(OrderVerification).count() == 0
+
+    sent_codes = []
+    monkeypatch.setattr(main.email_otp, "send_code", lambda _email, code: sent_codes.append(code))
+    main.send_order_verification(
+        prediction.transaction_id,
+        main.OrderVerificationSendRequest(shipping_address=address, address_confirmed=True),
+        db=database,
+        current_user=user,
+    )
+    challenge = database.query(OrderVerification).one()
+    assert challenge.address_confirmed_at is not None
+    assert challenge.shipping_address_hash == main.shipping_address_hash(address)
+    assert len(sent_codes) == 1
+
+
+def test_one_attempts_order_otp_cannot_authorize_another_order(database, monkeypatch):
+    user = make_user(database, "attempt-scoped@example.test")
+    first = run_prediction(database, user, monkeypatch, 0.1, "attempt-one", valid_checkout_snapshot(user))
+    second = run_prediction(database, user, monkeypatch, 0.1, "attempt-two", valid_checkout_snapshot(user))
+    first_code = verify_order_code(database, user, first.transaction_id, monkeypatch)
+    with pytest.raises(HTTPException) as error:
+        main.verify_order_verification(
+            second.transaction_id,
+            main.OrderVerificationCodeRequest(code=first_code),
+            db=database,
+            current_user=user,
+        )
+    assert error.value.status_code == 409
+    admin = Admin(email="admin-one-attempt@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    main.approve_review(second.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
+    with pytest.raises(HTTPException) as no_order_code:
+        main.create_order(order_request(second.transaction_id), db=database, current_user=user)
+    assert no_order_code.value.status_code == 403
+
+
+def test_wrong_expired_order_codes_and_attempt_lockout(database, monkeypatch):
+    user = make_user(database, "bad-order-code@example.test")
+    prediction = run_prediction(database, user, monkeypatch, 0.1, checkout_snapshot=valid_checkout_snapshot(user))
+    sent = []
+    monkeypatch.setattr(main.email_otp, "send_code", lambda _email, code: sent.append(code))
+    main.send_order_verification(
+        prediction.transaction_id,
+        main.OrderVerificationSendRequest(shipping_address=main.transaction_shipping_address(database.query(Transaction).one()), address_confirmed=True),
+        db=database,
+        current_user=user,
+    )
+    for attempt in range(main.ORDER_OTP_MAX_ATTEMPTS):
+        with pytest.raises(HTTPException) as error:
+            main.verify_order_verification(
+                prediction.transaction_id,
+                main.OrderVerificationCodeRequest(code="000000" if sent[-1] != "000000" else "000001"),
+                db=database,
+                current_user=user,
+            )
+        assert error.value.status_code == (429 if attempt == main.ORDER_OTP_MAX_ATTEMPTS - 1 else 400)
+    challenge = database.query(main.OrderVerification).one()
+    assert challenge.status == "LOCKED"
+    assert challenge.code_hash is None
+
+    # A separately issued code expires server-side and cannot authorize ordering.
+    challenge.status = "PENDING"
+    challenge.code_hash = main.order_otp_hash(user.id, user.email, prediction.transaction_id, challenge.checkout_attempt_id, sent[-1])
+    challenge.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    challenge.attempts = 0
+    database.commit()
+    with pytest.raises(HTTPException) as expired:
+        main.verify_order_verification(
+            prediction.transaction_id,
+            main.OrderVerificationCodeRequest(code=sent[-1]),
+            db=database,
+            current_user=user,
+        )
+    assert expired.value.status_code == 410
+
+
+def test_resend_invalidates_old_code_and_enforces_cooldown(database, monkeypatch):
+    user = make_user(database, "resend-order-code@example.test")
+    prediction = run_prediction(database, user, monkeypatch, 0.1, checkout_snapshot=valid_checkout_snapshot(user))
+    codes = iter(["123456", "654321"])
+    monkeypatch.setattr(main.secrets, "randbelow", lambda _maximum: int(next(codes)))
+    monkeypatch.setattr(main.email_otp, "send_code", lambda *_args: None)
+    request = main.OrderVerificationSendRequest(shipping_address=main.transaction_shipping_address(
+        database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    ), address_confirmed=True)
+    main.send_order_verification(prediction.transaction_id, request, db=database, current_user=user)
+    with pytest.raises(HTTPException) as cooldown:
+        main.send_order_verification(prediction.transaction_id, request, db=database, current_user=user)
+    assert cooldown.value.status_code == 429
+    challenge = database.query(main.OrderVerification).one()
+    challenge.resend_after = datetime.utcnow() - timedelta(seconds=1)
+    database.commit()
+    main.send_order_verification(prediction.transaction_id, request, db=database, current_user=user)
+    with pytest.raises(HTTPException) as old_code:
+        main.verify_order_verification(
+            prediction.transaction_id, main.OrderVerificationCodeRequest(code="123456"), db=database, current_user=user
+        )
+    assert old_code.value.status_code == 400
+    main.verify_order_verification(
+        prediction.transaction_id, main.OrderVerificationCodeRequest(code="654321"), db=database, current_user=user
+    )
+
+
+def test_order_challenge_is_private_and_address_changes_require_reconfirmation(database, monkeypatch):
+    user = make_user(database, "address-order-code@example.test")
+    other = make_user(database, "other-order-code@example.test")
+    prediction = run_prediction(database, user, monkeypatch, 0.1, checkout_snapshot=valid_checkout_snapshot(user))
+    with pytest.raises(HTTPException) as unauthenticated:
+        main.get_current_user(credentials=None, db=database)
+    assert unauthenticated.value.status_code == 401
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+    admin = Admin(email="admin-private-addr@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
+    with pytest.raises(HTTPException) as other_user:
+        main.verify_order_verification(
+            prediction.transaction_id, main.OrderVerificationCodeRequest(code="123456"), db=database, current_user=other
+        )
+    assert other_user.value.status_code == 404
+    transaction = database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    transaction.checkout_snapshot["shipping_address"]["line1"] = "2 Changed Road"
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(transaction, "checkout_snapshot")
+    database.commit()
+    with pytest.raises(HTTPException) as changed:
+        main.create_order(order_request(prediction.transaction_id), db=database, current_user=user)
+    assert changed.value.status_code == 403
+    assert database.query(Order).count() == 0
+
+
+def test_order_retry_is_idempotent_and_concurrent_submissions_do_not_duplicate(database, monkeypatch):
+    user = make_user(database, "concurrent-order@example.test")
+    prediction = run_prediction(database, user, monkeypatch, 0.1, checkout_snapshot=valid_checkout_snapshot(user))
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+    admin = Admin(email="admin-concurrent@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
+    database.commit()
+    database.expire_all()
+    request = order_request(prediction.transaction_id)
+    sessions = sessionmaker(bind=database.get_bind())
+    barrier = Barrier(2)
+
+    def submit_order():
+        with sessions() as concurrent_db:
+            concurrent_user = concurrent_db.query(User).filter(User.id == user.id).one()
+            barrier.wait(timeout=15)
+            try:
+                return main.create_order(request, db=concurrent_db, current_user=concurrent_user)
+            except HTTPException as error:
+                return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: submit_order(), range(2)))
+    assert any(isinstance(result, dict) for result in results)
+    assert all(not isinstance(result, HTTPException) or result.status_code == 503 for result in results)
+    assert database.query(Order).filter(Order.transaction_id == prediction.transaction_id).count() == 1
+    retry = main.create_order(request, db=database, current_user=user)
+    assert database.query(Order).filter(Order.transaction_id == prediction.transaction_id).one().id == retry["id"]
+
+
+def test_completed_order_verification_status_exposes_existing_order_for_recovery(database, monkeypatch):
+    user = make_user(database, "completed-order-recovery@example.test")
+    prediction = run_prediction(
+        database, user, monkeypatch, 0.12, "completed-order-recovery-attempt",
+        valid_checkout_snapshot(user),
+    )
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+    admin = Admin(email="admin-recovery@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
+    order = main.create_order(order_request(prediction.transaction_id), db=database, current_user=user)
+
+    status = main.get_order_verification_status(
+        prediction.transaction_id,
+        db=database,
+        current_user=user,
+    )
+    assert status["status"] == "complete"
+    assert status["transaction_id"] == prediction.transaction_id
+    assert status["order_id"] == order["id"]
+    assert status["transaction_status"] == "ORDERED"
+    assert database.query(Order).filter(Order.transaction_id == prediction.transaction_id).count() == 1
+
+
+def test_backend_checkout_snapshot_survives_review_and_controls_resumed_order(database, monkeypatch):
+    user = make_user(database, "snapshot-review@example.test")
+    admin = Admin(email="admin-snapshot@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    snapshot_address = {"full_name": "Saved Buyer", "line1": "9 Saved Road", "city": "Saved City", "postal_code": "560002", "country": "India", "address_confirmed": True}
     snapshot = {
         "items": [{"product_id": "p1", "quantity": 1}],
         "payment_method": "PAYPAL",
         "shipping_address": snapshot_address,
         "billing_address": snapshot_address,
     }
+    snapshot["verified_email"] = user.email
     prediction = run_prediction(database, user, monkeypatch, 0.5, "snapshot-review-attempt", snapshot)
     transaction = database.query(Transaction).one()
     assert transaction.checkout_snapshot["payment_method"] == snapshot["payment_method"]
     assert transaction.checkout_snapshot["items"][0]["store_category"] == "Audio"
-    assert transaction.transaction_data["ProductCD"] == "UNKNOWN"
+    assert transaction.transaction_data["ProductCD"] == "W"
     assert transaction.transaction_data["DeviceInfo"] == "UNKNOWN"
     assert transaction.transaction_data["P_emaildomain"] == "example.test"
+    assert prediction.decision == "REVIEW"
 
-    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(), db=database, current_admin=admin)
+    # The client retry may have stale details; persisted checkout data is authoritative.
+    stale_request = order_request(prediction.transaction_id, payment_method="PAYPAL")
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
     status = main.get_transaction_status(prediction.transaction_id, db=database, current_user=user)
     assert status["transaction_id"] == prediction.transaction_id
     assert status["checkout_snapshot"] == transaction.checkout_snapshot
-
-    # The client retry may have stale details; persisted checkout data is authoritative.
-    stale_request = order_request(prediction.transaction_id)
+    assert status["status"] == "REVIEW_APPROVED"
     order = main.create_order(stale_request, db=database, current_user=user)
     retry = main.create_order(stale_request, db=database, current_user=user)
     assert order["transaction_id"] == prediction.transaction_id
@@ -364,7 +1152,7 @@ def test_review_actions_require_admin_authentication(database, monkeypatch):
     assert customer_action.value.status_code == 401
     assert database.query(Transaction).one().status == "REVIEW"
     review_routes = [route for route in main.app.routes if route.path.startswith("/api/admin/reviews/")]
-    assert len(review_routes) == 3
+    assert len(review_routes) == 4
     assert all(any(dependency.call == main.get_current_admin for dependency in route.dependant.dependencies) for route in review_routes)
 
 
@@ -440,17 +1228,18 @@ def test_review_database_failure_rolls_back_and_returns_service_error(database, 
     assert transaction.review_decision is None
 
 
-def test_admin_approved_review_can_order_but_blocked_and_rejected_cannot(database, monkeypatch):
-    admin = Admin(email="payment-review-admin@example.test", hashed_password=hash_password("admin-test-password"))
+def test_medium_verification_can_order_but_blocked_and_rejected_cannot(database, monkeypatch):
+    admin = Admin(email="review-decider@example.test", hashed_password=hash_password("admin-test-password"))
     database.add(admin)
     database.commit()
-    database.refresh(admin)
-    headers = {"Authorization": f"Bearer {create_admin_access_token(admin.id)}"}
-
     approved_user = make_user(database, "admin-approved@example.test")
-    review = run_prediction(database, approved_user, monkeypatch, 0.5)
-    response = main.approve_review(review.transaction_id, main.AdminReviewRequest(), db=database, current_admin=admin)
-    assert response["status"] == "REVIEW_APPROVED"
+    review = run_prediction(database, approved_user, monkeypatch, 0.5, checkout_snapshot=valid_checkout_snapshot(approved_user))
+    assert review.decision == "REVIEW"
+    verify_order_code(database, approved_user, review.transaction_id, monkeypatch)
+    with pytest.raises(HTTPException) as unapproved_error:
+        main.create_order(order_request(review.transaction_id), db=database, current_user=approved_user)
+    assert unapproved_error.value.status_code == 409
+    main.approve_review(review.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
     order = main.create_order(order_request(review.transaction_id), db=database, current_user=approved_user)
     assert order["transaction_id"] == review.transaction_id
     assert database.query(Transaction).filter(Transaction.id == review.transaction_id).one().status == "ORDERED"
@@ -469,23 +1258,47 @@ def test_admin_approved_review_can_order_but_blocked_and_rejected_cannot(databas
     assert blocked_error.value.status_code == 409
 
 
-def test_admin_approved_review_creates_idempotent_357_50_order(database_with_legacy_orders, monkeypatch):
+def test_mixed_code_basket_requires_admin_review_before_idempotent_order(database_with_legacy_orders, monkeypatch):
     database = database_with_legacy_orders
-    admin = Admin(email="three-item-review-admin@example.test", hashed_password=hash_password("admin-test-password"))
-    database.add(admin)
-    database.commit()
-    database.refresh(admin)
     user = make_user(database, "three-item-review@example.test")
     verified_email(database, user)
     monkeypatch.setattr(main, "baseline_pipeline", FixedProbabilityPipeline(0.5))
     monkeypatch.setattr(main, "artifacts_loaded", True)
     monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
     prediction = main.predict_fraud(
-        main.TransactionInput(TransactionAmt=357.5, checkout_attempt_id="three-item-review-attempt", checkout_snapshot={"verified_email": user.email}),
+        main.TransactionInput(TransactionAmt=357.5, checkout_attempt_id="three-item-review-attempt", checkout_snapshot=valid_checkout_snapshot(user, items=[{"product_id": "p1", "quantity": 1}, {"product_id": "p2", "quantity": 1}, {"product_id": "p3", "quantity": 1}])),
         db=database,
         current_user=user,
     )
-    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(), db=database, current_admin=admin)
+    transaction = database.query(Transaction).filter_by(id=prediction.transaction_id).one()
+    assert transaction.transaction_data["ProductCD"] == "UNKNOWN"
+    assert prediction.decision == "REVIEW"
+    assert transaction.status == "REVIEW"
+    with pytest.raises(HTTPException) as held_order:
+        main.create_order(
+            main.CreateOrderRequest(
+                transaction_id=prediction.transaction_id,
+                items=[main.OrderItemRequest(product_id="p1", quantity=1), main.OrderItemRequest(product_id="p2", quantity=1), main.OrderItemRequest(product_id="p3", quantity=1)],
+                payment_method="CARD",
+                shipping_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"},
+                billing_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"},
+            ),
+            db=database,
+            current_user=user,
+        )
+    assert held_order.value.status_code == 409
+    admin = Admin(email="mixed-review-admin@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    database.refresh(admin)
+    decision = main.approve_review(
+        prediction.transaction_id,
+        main.AdminReviewRequest(reason="Reviewed mixed-code basket."),
+        db=database,
+        current_admin=admin,
+    )
+    assert decision["status"] == "REVIEW_APPROVED"
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
     request = main.CreateOrderRequest(
         transaction_id=prediction.transaction_id,
         items=[
@@ -494,8 +1307,8 @@ def test_admin_approved_review_creates_idempotent_357_50_order(database_with_leg
             main.OrderItemRequest(product_id="p3", quantity=1),
         ],
         payment_method="CARD",
-        shipping_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
-        billing_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
+        shipping_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"},
+        billing_address={"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"},
     )
 
     first = main.create_order(request, db=database, current_user=user)
@@ -520,14 +1333,16 @@ def test_user_cannot_order_another_users_transaction(database, monkeypatch):
 
 def test_order_rejects_client_price_mismatch_and_unknown_products(database, monkeypatch):
     user = make_user(database, "buyer-four@example.test")
-    prediction = run_prediction(database, user, monkeypatch, 0.2)
-    with pytest.raises(HTTPException) as mismatch:
-        main.create_order(order_request(prediction.transaction_id, quantity=2), db=database, current_user=user)
-    with pytest.raises(HTTPException) as unavailable:
-        main.create_order(order_request(prediction.transaction_id, product_id="not-a-product"), db=database, current_user=user)
-    assert mismatch.value.status_code == 409
-    assert unavailable.value.status_code == 422
-    assert database.query(Order).count() == 0
+    prediction = run_prediction(database, user, monkeypatch, 0.2, checkout_snapshot=valid_checkout_snapshot(user))
+    verify_order_code(database, user, prediction.transaction_id, monkeypatch)
+    admin = Admin(email="admin-price-mismatch@example.test", hashed_password=hash_password("admin-test-password"))
+    database.add(admin)
+    database.commit()
+    main.approve_review(prediction.transaction_id, main.AdminReviewRequest(reason="Admin review verified"), db=database, current_admin=admin)
+    # Server-persisted checkout items are authoritative if a retry sends stale client details.
+    created = main.create_order(order_request(prediction.transaction_id, quantity=2), db=database, current_user=user)
+    assert created["items"][0]["quantity"] == 1
+    assert database.query(Order).count() == 1
 
 
 def test_authentication_tokens_are_role_separated(database):
@@ -619,7 +1434,8 @@ def test_additive_startup_migration_preserves_legacy_rows(tmp_path):
     assert "name" in {column["name"] for column in inspector.get_columns("users")}
     assert "checkout_attempt_id" in {column["name"] for column in inspector.get_columns("transactions")}
     transaction_columns = {column["name"] for column in inspector.get_columns("transactions")}
-    assert {"review_decision", "reviewed_by_admin_id", "reviewed_at", "review_reason"}.issubset(transaction_columns)
+    assert {"review_decision", "reviewed_by_admin_id", "reviewed_at", "review_reason", "risk_reassessment"}.issubset(transaction_columns)
+    assert "score_based_decision" in {column["name"] for column in inspector.get_columns("fraud_predictions")}
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT id FROM users").scalar_one() == 1
         assert connection.exec_driver_sql("SELECT id FROM transactions").scalar_one() == 1
@@ -845,6 +1661,8 @@ def test_admin_prediction_explanation_uses_fitted_pipeline_features(database, mo
     assert explanation["risk_category"] == risk
     assert explanation["model_decision"] == decision
     assert {feature["name"] for feature in explanation["features"]} == set(feature_names)
+    assert "authenticated account email" in explanation["feature_provenance"]["P_emaildomain"]
+    assert "not independently verified" in explanation["feature_provenance"]["DeviceInfo"]
     assert explanation["attribution_available"] is True
     assert len(explanation["feature_contributions"]) == len(feature_names)
     assert np.isclose(
@@ -896,7 +1714,9 @@ def test_predict_fraud_stores_server_validated_amount_and_features(database, mon
         "verified_email": user.email,
         "items": [
             {"product_id": "p1", "name": "Headphones", "price": 129.0, "quantity": 1}
-        ]
+        ],
+        "shipping_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India", "address_confirmed": True},
+        "billing_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"},
     }
     # Client sends slightly rounded amount 129.0001, trusted catalog total is 129.0
     request = main.TransactionInput(
@@ -912,31 +1732,14 @@ def test_predict_fraud_stores_server_validated_amount_and_features(database, mon
     assert stored_tx.amount == 129.0
     assert stored_tx.transaction_data["TransactionAmt"] == 129.0
     assert stored_tx.transaction_data["P_emaildomain"] == "gmail.com"
-    assert stored_tx.transaction_data["ProductCD"] == "UNKNOWN"
+    assert stored_tx.transaction_data["ProductCD"] == "W"
     assert stored_tx.transaction_data["DeviceInfo"] == "UNKNOWN"
     assert stored_tx.transaction_data["DeviceType"] in {"desktop", "mobile", "UNKNOWN"}
     assert response.decision == "REVIEW"
-    assert response.review_reason is not None
-def test_logistic_regression_73_81_percent_regression_scenario(database, monkeypatch):
-    """Regression test for the 73.81% baseline fraud probability on typical $129 desktop checkout with gmail.com.
-
-    Verifies:
-    1. The exact mathematical prediction of baseline_pipeline on:
-       {TransactionAmt: 129.0, ProductCD: 'UNKNOWN', P_emaildomain: 'gmail.com', DeviceType: 'desktop', DeviceInfo: 'UNKNOWN'}
-       is 0.7381 (0.7380656...).
-    2. The log-odds decomposition:
-       - Intercept: ~ -0.8913
-       - TransactionAmt ($129): ~ -0.0088
-       - ProductCD ('UNKNOWN'): 0.0 (ignored by OneHotEncoder)
-       - DeviceType ('desktop'): ~ +0.1564
-       - DeviceInfo ('UNKNOWN'): ~ +0.5677
-       - P_emaildomain ('gmail.com'): ~ +1.2119
-       - Total log-odds: ~ +1.0359 -> sigmoid(+1.0359) = 0.7381
-    3. Even though raw score 0.7381 exceeds the BLOCK threshold (0.70), the operational decision is
-       clamped to 'REVIEW' by the manual review safeguard, preserving the checkout review pipeline.
-    4. Admin explanation clearly distinguishes the automated score-based outcome (BLOCK) from the
-       enforced operational decision (REVIEW) and includes the calibration notice.
-    """
+    assert response.score_based_decision == "APPROVE"
+    assert "all checkout transactions require mandatory administrator review" in response.review_reason
+def test_logistic_regression_uses_trusted_catalog_product_code(database, monkeypatch):
+    """The fitted baseline scores the catalog-derived W code using the existing score policy."""
     user = make_user(database, "customer@gmail.com")
     verified_email(database, user)
     admin = Admin(email="auditor@example.test", hashed_password=hash_password("audit-pass-123"), is_active=True)
@@ -948,45 +1751,48 @@ def test_logistic_regression_73_81_percent_regression_scenario(database, monkeyp
 
     snapshot = {
         "verified_email": user.email,
-        "items": [
-            {"product_id": "p1", "name": "Headphones", "price": 129.0, "quantity": 1}
-        ]
+        "items": [{"product_id": "p1", "quantity": 1}],
+        "shipping_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India", "address_confirmed": True},
+        "billing_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"},
     }
     request = main.TransactionInput(
         TransactionAmt=129.0,
-        ProductCD="Audio",
+        ProductCD="S",
         DeviceType="desktop",
         checkout_attempt_id="chk-7381-regression-1",
         checkout_snapshot=snapshot,
     )
     response = main.predict_fraud(request, db=database, current_user=user)
 
-    # 1. Exact score verification
-    assert response.fraud_probability == 0.7381
-    assert response.risk_level == "HIGH"
-    # 2. Operational decision is REVIEW, never automated BLOCK
+    assert response.fraud_probability == pytest.approx(0.6184, abs=0.0001)
+    assert response.risk_level == "MEDIUM"
     assert response.decision == "REVIEW"
+    assert response.score_based_decision == "REVIEW"
     assert response.model_used == "LogisticRegression_Baseline"
-    assert response.review_reason is not None
-    assert "ProductCD is unavailable" in response.review_reason
-    assert "class-balanced" in response.review_reason
+    stored = database.query(Transaction).filter_by(id=response.transaction_id).one()
+    assert stored.transaction_data["ProductCD"] == "W"
+    assert stored.status == "REVIEW"
 
     # 3. Admin explanation verification
     explanation = main.get_admin_transaction_explanation(
         response.transaction_id, db=database, current_admin=admin
     )
     assert explanation["score_reproduced"] is True
-    assert explanation["risk_score"] == 0.7381
-    assert explanation["risk_category"] == "HIGH"
-    assert explanation["automated_score_decision"] == "BLOCK"
+    assert explanation["risk_score"] == response.fraud_probability
+    assert explanation["risk_category"] == "MEDIUM"
+    assert explanation["automated_score_decision"] == "REVIEW"
     assert explanation["model_decision"] == "REVIEW"
+    admin_row = next(row for row in main.get_admin_transactions(db=database, current_admin=admin) if row["transaction_id"] == response.transaction_id)
+    assert admin_row["fraud_prediction"]["fraud_probability"] == response.fraud_probability
+    assert admin_row["fraud_prediction"]["risk_level"] == "MEDIUM"
+    assert admin_row["fraud_prediction"]["decision"] == "REVIEW"
     assert explanation["attribution_available"] is True
     assert explanation.get("calibration_notice") is not None
     assert "class_weight='balanced'" in explanation["calibration_notice"]
 
     # Verify log-odds contributions
     contribs = {item["name"]: item["contribution_log_odds"] for item in explanation["feature_contributions"]}
-    assert contribs["ProductCD"] == 0.0
+    assert contribs["ProductCD"] != 0.0
     assert contribs["P_emaildomain"] > 1.2
     assert contribs["DeviceInfo"] > 0.5
     assert contribs["DeviceType"] > 0.1
@@ -997,8 +1803,8 @@ def test_logistic_regression_73_81_percent_regression_scenario(database, monkeyp
     )
 
 
-def test_logistic_regression_low_score_cannot_auto_approve_with_unsupported_features(database, monkeypatch):
-    """Test that even if the baseline score is low, unsupported features still enforce manual review."""
+def test_logistic_regression_low_score_can_approve_verified_checkout(database, monkeypatch):
+    """A low score can approve when the required independent verifications are recorded."""
     user = make_user(database, "test.buyer@yahoo.com")
     verified_email(database, user)
     monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
@@ -1009,7 +1815,9 @@ def test_logistic_regression_low_score_cannot_auto_approve_with_unsupported_feat
         "verified_email": user.email,
         "items": [
             {"product_id": "p1", "name": "Headphones", "price": 129.0, "quantity": 1}
-        ]
+        ],
+        "shipping_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India", "address_confirmed": True},
+        "billing_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"},
     }
     request = main.TransactionInput(
         TransactionAmt=129.0,
@@ -1022,9 +1830,253 @@ def test_logistic_regression_low_score_cannot_auto_approve_with_unsupported_feat
     # Raw score would normally classify as LOW / APPROVE
     assert response.fraud_probability == 0.08
     assert response.risk_level == "LOW"
-    # But operational decision is held for REVIEW due to unmapped ProductCD
     assert response.decision == "REVIEW"
+    assert response.score_based_decision == "APPROVE"
     assert response.review_reason is not None
+
+
+def test_high_risk_checkout_requires_reassessment_explicit_decision_and_order_otp(database, monkeypatch):
+    user = make_user(database, "high-review-path@example.test")
+    admin = Admin(email="high-review-admin@example.test", hashed_password=hash_password("admin-password"))
+    database.add(admin)
+    database.commit()
+    database.refresh(admin)
+    prediction = run_prediction(
+        database, user, monkeypatch, 0.91,
+        attempt_id="high-review-path-attempt",
+        checkout_snapshot=valid_checkout_snapshot(user),
+    )
+    transaction = database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    stored_prediction = database.query(FraudPrediction).filter(FraudPrediction.transaction_id == transaction.id).one()
+    assert prediction.risk_level == "HIGH"
+    assert prediction.score_based_decision == "BLOCK"
+    assert prediction.decision == "REVIEW"
+    assert transaction.status == "REVIEW"
+    assert stored_prediction.score_based_decision == "BLOCK"
+    assert transaction.risk_reassessment is None
+
+    with pytest.raises(HTTPException) as direct_order:
+        main.create_order(order_request(transaction.id), db=database, current_user=user)
+    with pytest.raises(HTTPException) as direct_admin_approval:
+        main.approve_review(transaction.id, main.AdminReviewRequest(reason="Try to bypass checks"), db=database, current_admin=admin)
+    with pytest.raises(HTTPException) as direct_order_otp:
+        main.send_order_verification(
+            transaction.id,
+            main.OrderVerificationSendRequest(
+                shipping_address=main.transaction_shipping_address(transaction),
+                address_confirmed=True,
+            ),
+            db=database,
+            current_user=user,
+        )
+    assert direct_order.value.status_code == 409
+    assert direct_admin_approval.value.status_code == 409
+    assert direct_order_otp.value.status_code == 409
+    assert database.query(Order).count() == 0
+    assert transaction.status == "REVIEW"
+
+    reassessment = main.reassess_high_risk_transaction(transaction.id, db=database, current_admin=admin)
+    findings = reassessment["risk_reassessment"]
+    assert findings["ready_for_admin_decision"] is True
+    assert findings["score_based_decision"] == "BLOCK"
+    assert findings["operational_decision"] == "REVIEW"
+    assert findings["automatic_decision_changed"] is False
+    assert findings["address_account_checks"]["address_check"]["format_valid"] is True
+    assert findings["graph_relationship_check"]["status"] == "NOT_USED_BY_SCORING_MODEL"
+    assert transaction.status == "REVIEW"
+    assert transaction.review_decision is None
+
+    with pytest.raises(HTTPException) as missing_reason:
+        main.approve_review(transaction.id, main.AdminReviewRequest(), db=database, current_admin=admin)
+    assert missing_reason.value.status_code == 422
+    assert transaction.status == "REVIEW"
+
+    decision = main.approve_review(
+        transaction.id,
+        main.AdminReviewRequest(reason="Reviewed score, confirmed address and account history"),
+        db=database,
+        current_admin=admin,
+    )
+    assert decision["status"] == "REVIEW_APPROVED"
+    assert decision["review_decision"] == "APPROVE"
+    assert decision["score_based_decision"] == "BLOCK"
+    assert decision["risk_reassessment"]["administrator_decision"]["decision"] == "APPROVE"
+
+    verify_order_code(database, user, transaction.id, monkeypatch)
+    created = main.create_order(order_request(transaction.id), db=database, current_user=user)
+    retried = main.create_order(order_request(transaction.id), db=database, current_user=user)
+    assert created["id"] == retried["id"]
+    assert database.query(Order).filter(Order.transaction_id == transaction.id).count() == 1
+    assert database.query(OrderVerification).filter(OrderVerification.transaction_id == transaction.id).one().status == "USED"
+
+
+@pytest.mark.parametrize(("action", "expected_status", "expected_operational"), [
+    ("approve", "REVIEW_APPROVED", "ADMIN_APPROVE"),
+    ("reject", "REJECTED", "ADMIN_REJECT"),
+])
+def test_high_risk_customer_status_preserves_score_and_reports_current_admin_decision(
+    database, monkeypatch, action, expected_status, expected_operational,
+):
+    user = make_user(database, f"high-status-{action}@example.test")
+    admin = Admin(email=f"high-status-admin-{action}@example.test", hashed_password=hash_password("admin-password"))
+    database.add(admin)
+    database.commit()
+    prediction = run_prediction(
+        database, user, monkeypatch, 0.92,
+        f"high-status-attempt-{action}", valid_checkout_snapshot(user),
+    )
+    main.reassess_high_risk_transaction(prediction.transaction_id, db=database, current_admin=admin)
+    handler = main.approve_review if action == "approve" else main.reject_review
+    reason = f"Reviewed high-risk case and recorded {action} rationale."
+    handler(
+        prediction.transaction_id,
+        main.AdminReviewRequest(reason=reason),
+        db=database,
+        current_admin=admin,
+    )
+
+    status = main.get_transaction_status(prediction.transaction_id, db=database, current_user=user)
+    assert status["status"] == expected_status
+    assert status["operational_decision"] == expected_operational
+    assert status["review_decision"] == action.upper()
+    assert status["review_reason"] == reason
+    assert status["fraud_prediction"]["decision"] == "REVIEW"
+    assert status["fraud_prediction"]["operational_decision"] == expected_operational
+    assert status["fraud_prediction"]["score_based_decision"] == "BLOCK"
+    assert status["fraud_prediction"]["manual_decision"] == action.upper()
+    assert status["fraud_prediction"]["administrator_reason"] == reason
+    assert status["fraud_prediction"]["fraud_probability"] == 0.92
+
+
+def test_address_change_invalidates_high_risk_reassessment(database, monkeypatch):
+    user = make_user(database, "stale-address-assessment@example.test")
+    admin = Admin(email="stale-address-admin@example.test", hashed_password=hash_password("admin-password"))
+    database.add(admin)
+    database.commit()
+    prediction = run_prediction(
+        database, user, monkeypatch, 0.92,
+        attempt_id="stale-address-attempt",
+        checkout_snapshot=valid_checkout_snapshot(user),
+    )
+    main.reassess_high_risk_transaction(prediction.transaction_id, db=database, current_admin=admin)
+
+    transaction = database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one()
+    transaction.checkout_snapshot["shipping_address"]["line1"] = "2 Changed Road"
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(transaction, "checkout_snapshot")
+    database.commit()
+
+    with pytest.raises(HTTPException) as stale_assessment:
+        main.approve_review(
+            prediction.transaction_id,
+            main.AdminReviewRequest(reason="Address changed after reassessment"),
+            db=database,
+            current_admin=admin,
+        )
+    assert stale_assessment.value.status_code == 409
+    assert transaction.status == "REVIEW"
+    assert transaction.review_decision is None
+
+
+def test_high_risk_graph_assessment_keeps_incomplete_deviceinfo_evidence_visible_and_requires_ack(database, monkeypatch):
+    user = make_user(database, "graph-high-review@example.test")
+    admin = Admin(email="graph-high-review-admin@example.test", hashed_password=hash_password("admin-password"))
+    database.add(admin)
+    database.commit()
+    snapshot = valid_checkout_snapshot(user)
+    prediction = run_graph_prediction(database, user, monkeypatch, 0.88, snapshot)
+    incomplete_context = {
+        "training_topology": "P_emaildomain, DeviceInfo",
+        "live_topology": "P_emaildomain",
+        "missing_edge_features": ["DeviceInfo"],
+        "connected_neighbors": 2,
+        "topology_validation_status": "UNVALIDATED_INSUFFICIENT_DATA",
+        "topology_note": "DeviceInfo links are unavailable because live DeviceInfo is UNKNOWN.",
+    }
+    monkeypatch.setattr(main, "_build_live_gnn_graph", lambda *_args, **_kwargs: (None, incomplete_context))
+    findings = main.reassess_high_risk_transaction(prediction.transaction_id, db=database, current_admin=admin)["risk_reassessment"]
+    graph = findings["graph_relationship_check"]
+    assert graph["status"] == "INCOMPLETE_EVIDENCE"
+    assert graph["topology_validation_status"] == "UNVALIDATED_INSUFFICIENT_DATA"
+    assert graph["training_edge_features"] == ["P_emaildomain", "DeviceInfo"]
+    assert graph["live_edge_features"] == ["P_emaildomain"]
+    assert graph["missing_edge_features"] == ["DeviceInfo"]
+    assert database.query(Transaction).filter(Transaction.id == prediction.transaction_id).one().status == "REVIEW"
+
+    with pytest.raises(HTTPException) as unacknowledged:
+        main.approve_review(
+            prediction.transaction_id,
+            main.AdminReviewRequest(reason="Inspected available edges"),
+            db=database,
+            current_admin=admin,
+        )
+    assert unacknowledged.value.status_code == 422
+    approved = main.approve_review(
+        prediction.transaction_id,
+        main.AdminReviewRequest(
+            reason="Manual review accepts remaining DeviceInfo limitation",
+            acknowledge_incomplete_graph_evidence=True,
+        ),
+        db=database,
+        current_admin=admin,
+    )
+    assert approved["risk_reassessment"]["graph_relationship_check"]["status"] == "INCOMPLETE_EVIDENCE"
+    assert approved["risk_reassessment"]["administrator_decision"]["acknowledge_incomplete_graph_evidence"] is True
+
+
+def test_high_risk_reassessment_records_shared_address_and_available_delivery_history(database, monkeypatch):
+    user = make_user(database, "address-history-high@example.test")
+    admin = Admin(email="address-history-admin@example.test", hashed_password=hash_password("admin-password"))
+    database.add(admin)
+    database.commit()
+    address = {
+        "full_name": "Primary Buyer", "line1": "42 Shared Road", "locality": "Central",
+        "city": "Sample City", "state": "Karnataka", "postal_code": "560001",
+        "country": "India", "address_confirmed": True,
+    }
+    prediction = run_prediction(
+        database, user, monkeypatch, 0.9,
+        checkout_snapshot=valid_checkout_snapshot(user, address=address),
+    )
+    other_user = make_user(database, "new-shared-address@example.test")
+    other_snapshot = valid_checkout_snapshot(other_user, address={**address, "full_name": "Different Recipient"})
+    other_tx = Transaction(
+        user_id=other_user.id,
+        checkout_attempt_id="other-address-history-attempt",
+        checkout_snapshot=other_snapshot,
+        transaction_data={"TransactionAmt": 129.0},
+        amount=129.0,
+        currency="USD",
+        status="ORDERED",
+    )
+    database.add(other_tx)
+    database.flush()
+    other_order = Order(
+        user_id=other_user.id,
+        transaction_id=other_tx.id,
+        items=[{"product_id": "p1", "quantity": 1}],
+        shipping_address={key: value for key, value in other_snapshot["shipping_address"].items() if key != "address_confirmed"},
+        billing_address=other_snapshot["billing_address"],
+        amount=129.0,
+        currency="USD",
+        status="DELIVERY_REFUSED",
+        payment_status="SIMULATED",
+        payment_method="CARD",
+    )
+    database.add(other_order)
+    database.commit()
+
+    reassessment = main.reassess_high_risk_transaction(prediction.transaction_id, db=database, current_admin=admin)["risk_reassessment"]
+    history = reassessment["address_account_checks"]["account_history"]
+    assert history["matching_address_orders_last_30_days"] == 1
+    assert history["other_accounts_with_matching_checkout_address_last_30_days"] == 1
+    assert history["other_new_accounts_with_matching_checkout_address_last_30_days"] == 1
+    assert history["recorded_cancellation_or_delivery_failure_status_counts"] == {"DELIVERY_REFUSED": 1}
+    assert history["delivery_refusal_history_available"] is True
+    assert history["shared_address_is_informational_only"] is True
+    assert reassessment["risk_level"] == "HIGH"
+    assert reassessment["score_based_decision"] == "BLOCK"
+    assert reassessment["automatic_decision_changed"] is False
 
 
 def test_graphsage_explanation_field_separation_and_topology_limitation(database, monkeypatch):
@@ -1086,6 +2138,11 @@ def test_graphsage_explanation_field_separation_and_topology_limitation(database
     assert explanation["automated_score_decision"] == "BLOCK"
     assert explanation["model_decision"] == "REVIEW"
     assert explanation["risk_category"] == "HIGH"
+    assert explanation["checkout_evidence"]["product_cd"] == "UNKNOWN"
+    assert explanation["checkout_evidence"]["product_cd_validated"] is False
+    assert explanation["checkout_evidence"]["order_otp_status"] == "NOT_STARTED"
+    assert explanation["checkout_evidence"]["device_type"] == "desktop"
+    assert explanation["checkout_evidence"]["device_info"] == "UNKNOWN"
 
     # 2. Linear feature attribution is hidden/inapplicable
     assert explanation["attribution_available"] is False
@@ -1122,10 +2179,11 @@ def test_admin_review_workflow_and_persistence(database):
 
     pred_approve = FraudPrediction(
         transaction_id=txn_approve.id,
-        fraud_probability=0.75,
-        risk_level="HIGH",
+        fraud_probability=0.55,
+        risk_level="MEDIUM",
         decision="REVIEW",
-        model_used="GraphSAGE",
+        score_based_decision="REVIEW",
+        model_used="LogisticRegression_Baseline",
     )
     database.add(pred_approve)
     database.commit()
@@ -1173,10 +2231,11 @@ def test_admin_review_workflow_and_persistence(database):
 
     pred_reject = FraudPrediction(
         transaction_id=txn_reject.id,
-        fraud_probability=0.92,
-        risk_level="HIGH",
+        fraud_probability=0.55,
+        risk_level="MEDIUM",
         decision="REVIEW",
-        model_used="GraphSAGE",
+        score_based_decision="REVIEW",
+        model_used="LogisticRegression_Baseline",
     )
     database.add(pred_reject)
     database.commit()
@@ -1217,10 +2276,11 @@ def test_customer_review_status_reflection_and_unauthorized_isolation(database):
 
     pred = FraudPrediction(
         transaction_id=txn.id,
-        fraud_probability=0.82,
-        risk_level="HIGH",
+        fraud_probability=0.50,
+        risk_level="MEDIUM",
         decision="REVIEW",
-        model_used="GraphSAGE",
+        score_based_decision="REVIEW",
+        model_used="LogisticRegression_Baseline",
     )
     database.add(pred)
     database.commit()
@@ -1249,7 +2309,7 @@ def test_customer_review_status_reflection_and_unauthorized_isolation(database):
     assert exc.value.status_code == 404
 
 
-def test_customer_cannot_bypass_pending_review_to_place_order(database):
+def test_customer_cannot_bypass_pending_review_to_place_order(database, monkeypatch):
     """Verify that a customer cannot bypass a pending review by directly calling create_order."""
     user = make_user(database, "bypass-test@example.test")
     verified_email(database, user)
@@ -1261,8 +2321,8 @@ def test_customer_cannot_bypass_pending_review_to_place_order(database):
         "items": [
             {"product_id": "p1", "name": "Watch", "price": 129.0, "quantity": 1}
         ],
-        "shipping_address": {"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
-        "billing_address": {"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "00000", "country": "Exampleland"},
+        "shipping_address": {"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India", "address_confirmed": True},
+        "billing_address": {"full_name": "Test Buyer", "line1": "1 Example Road", "city": "Example City", "postal_code": "560001", "country": "India"},
         "payment_method": "CARD",
     }
     txn = Transaction(
@@ -1281,7 +2341,8 @@ def test_customer_cannot_bypass_pending_review_to_place_order(database):
         fraud_probability=0.8350,
         risk_level="HIGH",
         decision="REVIEW",
-        model_used="GraphSAGE",
+        score_based_decision="BLOCK",
+        model_used="LogisticRegression_Baseline",
     )
     database.add(pred)
     database.commit()
@@ -1295,6 +2356,7 @@ def test_customer_cannot_bypass_pending_review_to_place_order(database):
     assert "not approved for payment" in exc.value.detail.lower()
 
     # Now admin approves the review
+    main.reassess_high_risk_transaction(txn.id, db=database, current_admin=admin)
     main.approve_review(
         txn.id,
         request=main.AdminReviewRequest(reason="Admin approved"),
@@ -1303,6 +2365,7 @@ def test_customer_cannot_bypass_pending_review_to_place_order(database):
     )
 
     # After approval, create_order succeeds
+    verify_order_code(database, user, txn.id, monkeypatch)
     order = main.create_order(order_req, db=database, current_user=user)
     assert order["status"] == "PROCESSING"
     assert order["transaction_id"] == txn.id

@@ -24,7 +24,6 @@ import UserDashboard from '../pages/Dashboard';
 import FraudDashboard from '../pages/admin/FraudDashboard';
 import AdminCustomers from '../pages/admin/AdminCustomers';
 import AdminCustomerDetailPage from '../pages/admin/AdminCustomerDetailPage';
-import AdminTransactions from '../pages/admin/AdminTransactionsPage';
 import AdminExplanationPage from '../pages/admin/AdminExplanationPage';
 import AdminBenchmarkPage from '../pages/admin/AdminBenchmarkPage';
 import AdminLogin from '../pages/admin/AdminLogin';
@@ -77,7 +76,12 @@ function AppRoutes() {
         } />
         <Route path="transactions" element={
           <AdminProtectedRoute>
-            <AdminTransactions />
+            <AdminExplanationPage />
+          </AdminProtectedRoute>
+        } />
+        <Route path="transactions/:transactionId" element={
+          <AdminProtectedRoute>
+            <AdminExplanationPage />
           </AdminProtectedRoute>
         } />
         <Route path="transactions/:transactionId/explanation" element={

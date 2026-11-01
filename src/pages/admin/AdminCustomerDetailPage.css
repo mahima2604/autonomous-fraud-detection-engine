@@ -64,8 +64,129 @@
   overflow-wrap: anywhere;
 }
 
+/* History Table & Scroll Container */
+.admin-customer-detail-body .admin-table-scroll-container {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+}
+
+.admin-customer-detail-body .admin-table-scroll-container::-webkit-scrollbar {
+  height: 8px;
+}
+
+.admin-customer-detail-body .admin-table-scroll-container::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.admin-customer-detail-body .admin-table-scroll-container::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+.admin-customer-detail-body .admin-table-scroll-container::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
 .admin-cust-history-table {
-  min-width: 820px;
+  width: 100%;
+  min-width: 1680px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  text-align: left;
+}
+
+.admin-cust-history-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.admin-cust-history-table th:first-child,
+.admin-cust-history-table td:first-child {
+  padding-left: 20px;
+}
+
+.admin-cust-history-table th:last-child,
+.admin-cust-history-table td:last-child {
+  padding-right: 20px;
+  text-align: right;
+}
+
+.admin-cust-history-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #f1f5f9;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: #1e293b;
+  box-sizing: border-box;
+}
+
+.admin-cust-history-table tbody tr {
+  transition: background-color 0.12s ease;
+}
+
+.admin-cust-history-table tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+/* Specific column styles */
+.admin-cust-history-table .col-id { width: 135px; min-width: 135px; }
+.admin-cust-history-table .col-amount { width: 105px; min-width: 105px; }
+.admin-cust-history-table .col-score { width: 100px; min-width: 100px; }
+.admin-cust-history-table .col-risk { width: 135px; min-width: 135px; }
+.admin-cust-history-table .col-score-outcome { width: 135px; min-width: 135px; }
+.admin-cust-history-table .col-orig-decision { width: 140px; min-width: 140px; }
+.admin-cust-history-table .col-saved-assessment { width: 175px; min-width: 175px; }
+.admin-cust-history-table .col-operational { width: 155px; min-width: 155px; }
+.admin-cust-history-table .col-status { width: 140px; min-width: 140px; }
+.admin-cust-history-table .col-review { width: 150px; min-width: 150px; }
+.admin-cust-history-table .col-model { width: 125px; min-width: 125px; }
+.admin-cust-history-table .col-time { width: 165px; min-width: 165px; }
+.admin-cust-history-table .col-action { width: 120px; min-width: 120px; text-align: right; }
+
+.admin-cust-history-table .decision-text {
+  font-weight: 600;
+  color: #334155;
+  font-size: 12px;
+}
+
+.admin-cust-history-table .saved-assessment-pill {
+  display: inline-block;
+  padding: 3px 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #475569;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-cust-history-table .review-cell-text {
+  font-size: 12px;
+  color: #475569;
+  font-weight: 500;
 }
 
 .admin-page-state {

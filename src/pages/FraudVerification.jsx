@@ -39,6 +39,12 @@ function FraudVerification() {
       const modelPrediction = current.fraud_prediction;
       const savedResult = pending.fraudResult || {};
       const modelDecision = modelPrediction?.decision || savedResult.modelDecision || savedResult.decision;
+      const mediumReleased = modelPrediction?.risk_level === 'MEDIUM'
+        && current.status === 'APPROVED'
+        && current.risk_reassessment?.medium_verification_release?.status === 'RELEASED';
+      const mediumVerificationRequired = modelPrediction?.risk_level === 'MEDIUM'
+        && modelPrediction?.decision === 'VERIFY'
+        && current.status === 'VERIFY';
       const isApprovedReview = ['REVIEW_APPROVED', 'ORDERED'].includes(current.status)
         && current.review_decision === 'APPROVE';
       const isRejectedReview = current.status === 'REJECTED' && current.review_decision === 'REJECT';
@@ -49,7 +55,10 @@ function FraudVerification() {
         fraudScore: modelPrediction?.fraud_probability ?? savedResult.fraudScore,
         modelDecision,
         reviewReason: modelPrediction?.review_reason || savedResult.reviewReason,
-        decision: isApprovedReview ? 'APPROVE' : isRejectedReview ? 'REJECT' : modelDecision,
+        decision: isApprovedReview || mediumReleased ? 'APPROVE'
+          : isRejectedReview ? 'REJECT'
+            : mediumVerificationRequired ? 'VERIFY' : modelDecision,
+        operationalDecision: current.operational_decision || (mediumReleased ? 'APPROVE' : modelDecision),
         transactionStatus: current.status,
         reviewDecision: current.review_decision,
         reviewedAt: current.reviewed_at,
@@ -57,7 +66,11 @@ function FraudVerification() {
       };
       savePendingCheckout({ ...pending, transactionId: current.transaction_id, fraudResult: updatedResult });
       setResult(updatedResult);
-      setStatusNotice(isApprovedReview
+      setStatusNotice(mediumVerificationRequired
+        ? 'Complete the additional checkout verification to continue.'
+        : mediumReleased
+          ? 'Additional verification passed. The original model score remains unchanged; you can continue to the simulated payment step.'
+          : isApprovedReview
         ? 'An administrator approved this transaction. Your saved checkout is ready to continue.'
         : isRejectedReview
           ? 'An administrator rejected this transaction. Payment is unavailable.'
@@ -66,7 +79,7 @@ function FraudVerification() {
           : current.status === 'APPROVED'
             ? 'This transaction is approved. Your saved checkout is ready to continue.'
             : 'This transaction is still awaiting administrator review.');
-      if (isApprovedReview) navigate('/payment', { replace: true });
+      if (isApprovedReview || mediumReleased || mediumVerificationRequired) navigate('/payment', { replace: true });
     } catch (statusRequestError) {
       if (!isActive()) return;
       setStatusError(statusRequestError.status === 401
@@ -92,7 +105,8 @@ function FraudVerification() {
         if (isActive()) {
           savePendingCheckout({ ...pending, transactionId: res.transactionId, fraudResult: res });
           setResult(res);
-          if (res.decision === 'REVIEW') refreshStatus(true, isActive);
+          if (res.decision === 'REVIEW' && res.riskLevel !== 'MEDIUM') refreshStatus(true, isActive);
+          if (res.decision === 'VERIFY' && res.riskLevel === 'MEDIUM') navigate('/payment', { replace: true });
         }
       })
       .catch((err) => isActive() && setError(err.message || 'Fraud check failed. Please try again.'))
@@ -175,6 +189,15 @@ function FraudVerification() {
               {result.decision === 'APPROVE' && (
                 <button className="btn btn-primary" onClick={handleContinueToPayment}>
                   Continue to Payment
+                </button>
+              )}
+
+              {result.decision === 'VERIFY' && result.riskLevel === 'MEDIUM' && (
+                <button className="btn btn-primary" onClick={() => {
+                  savePendingCheckout({ ...pending, fraudResult: result });
+                  navigate('/payment');
+                }}>
+                  Continue to additional verification
                 </button>
               )}
 

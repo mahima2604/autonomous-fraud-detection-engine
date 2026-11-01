@@ -10,8 +10,12 @@ import './AdminCustomerDetailPage.css';
 
 const DECISION_CLASS = {
   APPROVE: 'badge-low',
+  ADMIN_APPROVE: 'badge-low',
   REVIEW: 'badge-medium',
+  VERIFY: 'badge-medium',
   BLOCK: 'badge-high',
+  ADMIN_REJECT: 'badge-high',
+  REJECT: 'badge-high',
 };
 
 function AdminCustomerDetailPage() {
@@ -159,20 +163,25 @@ function AdminCustomerDetailPage() {
               <table className="admin-table admin-cust-history-table">
                 <thead>
                   <tr>
-                    <th>Transaction ID</th>
-                    <th>Amount</th>
-                    <th>Fraud Score</th>
-                    <th>Risk Level</th>
-                    <th>Model Decision</th>
-                    <th>Model Version</th>
-                    <th>Assessed At</th>
-                    <th>Actions</th>
+                    <th className="col-id">Transaction ID</th>
+                    <th className="col-amount">Amount</th>
+                    <th className="col-score">Fraud Score</th>
+                    <th className="col-risk">Risk Level</th>
+                    <th className="col-score-outcome">Score Outcome</th>
+                    <th className="col-orig-decision">Original Decision</th>
+                    <th className="col-saved-assessment">Saved Assessment</th>
+                    <th className="col-operational">Operational Decision</th>
+                    <th className="col-status">Checkout Status</th>
+                    <th className="col-review">Admin Review</th>
+                    <th className="col-model">Model Version</th>
+                    <th className="col-time">Assessed At</th>
+                    <th className="col-action">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {!details.transactions || details.transactions.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="admin-table-empty">
+                      <td colSpan="13" className="admin-table-empty">
                         No transactions recorded yet for this customer account.
                       </td>
                     </tr>
@@ -182,34 +191,53 @@ function AdminCustomerDetailPage() {
 
                       return (
                         <tr key={transaction.transaction_id}>
-                          <td>
+                          <td className="col-id">
                             <span className="admin-txn-id">TXN-{transaction.transaction_id}</span>
                           </td>
-                          <td className="font-tabular">
+                          <td className="col-amount font-tabular">
                             <strong>{formatCurrency(transaction.amount)}</strong>
                           </td>
                           {prediction ? (
                             <>
-                              <td className="font-tabular">
+                              <td className="col-score font-tabular">
                                 <span className="risk-score-value">
                                   {Number(prediction.fraud_probability).toFixed(4)}
                                 </span>
                               </td>
-                              <td>
+                              <td className="col-risk">
                                 <RiskBadge riskLevel={prediction.risk_level} />
                               </td>
-                              <td>
-                                <span className={`badge ${DECISION_CLASS[prediction.decision] || 'badge-neutral'}`}>
-                                  {prediction.decision}
+                              <td className="col-score-outcome">
+                                <span className={`badge ${DECISION_CLASS[prediction.score_based_decision] || 'badge-neutral'}`}>
+                                  {prediction.score_based_decision || '—'}
                                 </span>
                               </td>
-                              <td>
+                              <td className="col-orig-decision">
+                                <span className="decision-text">{prediction.decision || '—'}</span>
+                              </td>
+                              <td className="col-saved-assessment" title={prediction.classification_consistent ? 'Saved assessment matches current thresholds' : 'Saved historical values are preserved'}>
+                                <span className="saved-assessment-pill">
+                                  {prediction.recorded_risk_level || '—'} / {prediction.recorded_score_based_decision || 'decision not recorded'}
+                                </span>
+                              </td>
+                              <td className="col-operational">
+                                <span className={`badge ${DECISION_CLASS[prediction.operational_decision] || 'badge-neutral'}`}>
+                                  {prediction.operational_decision || '—'}
+                                </span>
+                              </td>
+                              <td className="col-status">
+                                <span className="status-cell-text">{transaction.status || '—'}</span>
+                              </td>
+                              <td className="col-review">
+                                <span className="review-cell-text">{prediction.manual_decision || 'Pending / not required'}</span>
+                              </td>
+                              <td className="col-model">
                                 <span className="model-tag">{prediction.model_used || '—'}</span>
                               </td>
-                              <td className="font-tabular">
+                              <td className="col-time font-tabular">
                                 <span className="time-cell-text">{formatDateTime(prediction.created_at)}</span>
                               </td>
-                              <td>
+                              <td className="col-action">
                                 <button
                                   type="button"
                                   className="btn-action-explain"
@@ -222,10 +250,10 @@ function AdminCustomerDetailPage() {
                             </>
                           ) : (
                             <>
-                              <td colSpan="5" className="text-muted">
+                              <td colSpan="10" className="text-muted">
                                 No fraud prediction recorded. (Created: {formatDateTime(transaction.created_at)})
                               </td>
-                              <td>—</td>
+                              <td className="col-action">—</td>
                             </>
                           )}
                         </tr>

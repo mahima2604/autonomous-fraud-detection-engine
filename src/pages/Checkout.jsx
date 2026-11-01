@@ -6,13 +6,15 @@ import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/cart';
 import { useAuth } from '../context/auth';
 import AddressForm from '../components/checkout/AddressForm';
+import CheckoutEmailVerification from '../components/checkout/CheckoutEmailVerification';
 import OrderSummary from '../components/checkout/OrderSummary';
 import { buildTransactionPayload, clearPendingCheckout, getPendingCheckout, savePendingCheckout } from '../services/checkoutService';
 import { getTransactionStatus } from '../services/fraudService';
 import EmptyState from '../components/common/EmptyState';
 import { getEmailVerificationStatus, sendEmailOtp, verifyEmailOtp } from '../services/emailVerificationService';
+import { validateAddress } from '../services/addressValidation';
 
-const EMPTY_ADDRESS = { fullName: '', line1: '', city: '', postalCode: '', country: '' };
+const EMPTY_ADDRESS = { fullName: '', line1: '', locality: '', city: '', state: '', postalCode: '', country: '', addressConfirmed: false };
 
 function Checkout() {
   const { items: cartItems, subtotal: cartSubtotal } = useCart();
@@ -31,7 +33,7 @@ function Checkout() {
     !savedCheckout?.billingAddress || JSON.stringify(savedCheckout.billingAddress) === JSON.stringify(savedCheckout.shippingAddress));
   const [paymentMethod, setPaymentMethod] = useState(() => savedCheckout?.paymentMethod || 'CARD');
   const [otp, setOtp] = useState('');
-  const [verifiedEmail, setVerifiedEmail] = useState('');
+  const [checkoutOtpVerified, setCheckoutOtpVerified] = useState(false);
   const [targetEmail, setTargetEmail] = useState(user?.email || '');
   const [checkingEmailStatus, setCheckingEmailStatus] = useState(true);
   const [otpSent, setOtpSent] = useState(false);
@@ -48,11 +50,9 @@ function Checkout() {
   useEffect(() => {
     let active = true;
     setCheckingEmailStatus(true);
-    setVerifiedEmail('');
     getEmailVerificationStatus().then((status) => {
       if (!active) return;
       setTargetEmail(status.email_address || user?.email || '');
-      setVerifiedEmail(status.verified ? status.email_address : '');
     }).catch(() => {}).finally(() => active && setCheckingEmailStatus(false));
     return () => { active = false; };
   }, [user?.id, user?.email]);
@@ -72,13 +72,16 @@ function Checkout() {
     try {
       const response = await sendEmailOtp();
       setTargetEmail(response.email_address || targetEmail);
-      setVerifiedEmail('');
       setOtpSent(true);
+      setCheckoutOtpVerified(false);
       setOtp('');
       setResendAfter(response.resend_after_seconds || 30);
-      setOtpMessage(`Email sent to ${response.email_address || targetEmail}. Enter the verification code from that message.`);
+      setOtpMessage('OTP sent to your registered email. Enter the code to continue this checkout.');
     } catch (requestError) {
-      setOtpError(requestError.message || 'Could not send OTP. Please try again.');
+      const message = requestError.message || 'Could not send OTP. Please try again.';
+      const cooldown = message.match(/wait\s+(\d+)\s+seconds?/i);
+      if (cooldown) setResendAfter(Number(cooldown[1]));
+      setOtpError(message);
     } finally {
       otpRequestLock.current = false;
       setOtpBusy(false);
@@ -93,8 +96,8 @@ function Checkout() {
     setOtpMessage('');
     try {
       await verifyEmailOtp(otp.trim());
-      setVerifiedEmail(targetEmail);
-      setOtpMessage('Email verified ✓');
+      setCheckoutOtpVerified(true);
+      setOtpMessage('OTP verified for this checkout.');
       setOtpError('');
     } catch (verifyError) {
       setOtpError(verifyError.message || 'OTP verification failed. Please try again.');
@@ -186,10 +189,13 @@ function Checkout() {
   }
 
   function validate() {
-    const requiredFilled = (addr) => Object.values(addr).every((v) => v.trim().length > 0);
-    if (!requiredFilled(shipping)) return 'Please complete the shipping address.';
-    if (!sameAsShipping && !requiredFilled(billing)) return 'Please complete the billing address.';
-    if (!targetEmail || verifiedEmail !== targetEmail) return 'Verify your account email before continuing.';
+    const shippingError = validateAddress(shipping, { requireConfirmation: true });
+    if (shippingError) return `Shipping address: ${shippingError}`;
+    if (!sameAsShipping) {
+      const billingError = validateAddress(billing);
+      if (billingError) return `Billing address: ${billingError}`;
+    }
+    if (!targetEmail || !checkoutOtpVerified) return 'Send and verify the checkout OTP before continuing.';
     return '';
   }
 
@@ -241,27 +247,20 @@ function Checkout() {
             <AddressForm values={shipping} onChange={setShipping} prefix="ship" />
           </div>
 
-          <section className="card card-padded" style={{ marginBottom: 20 }} aria-labelledby="email-verification-heading">
-            <h3 id="email-verification-heading">Email Verification</h3>
-            <p>Verify the email address on your signed-in account before continuing to fraud verification.</p>
-            <div className="field">
-              <label htmlFor="checkout-email">Account email</label>
-              <input id="checkout-email" type="email" value={targetEmail} readOnly />
-            </div>
-            {!verifiedEmail && <button className="btn btn-secondary" type="button" onClick={handleSendOtp} disabled={otpBusy || checkingEmailStatus || resendAfter > 0 || !targetEmail}>
-              {otpBusy && !otpSent ? 'Sending...' : resendAfter > 0 && otpSent ? `Resend OTP in ${resendAfter}s` : otpSent ? 'Resend OTP' : 'Send OTP'}
-            </button>}
-            {otpSent && !verifiedEmail && <div className="field" style={{ marginTop: 14 }}>
-              <label htmlFor="checkout-otp">One-time password</label>
-              <input id="checkout-otp" inputMode="numeric" autoComplete="one-time-code" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} />
-              <button className="btn btn-primary" type="button" style={{ marginTop: 10 }} onClick={handleVerifyOtp} disabled={otpBusy || otp.length !== 6}>
-                {otpBusy ? 'Verifying...' : 'Verify OTP'}
-              </button>
-            </div>}
-            {otpMessage && <p role="status" style={{ marginBottom: 0 }}>{otpMessage}</p>}
-            {otpError && <p role="alert" className="form-error-banner">{otpError}</p>}
-            {verifiedEmail && <p role="status" style={{ fontWeight: 600 }}>Email verified ✓</p>}
-          </section>
+          <CheckoutEmailVerification
+            email={targetEmail}
+            checkingEmailStatus={checkingEmailStatus}
+            otp={otp}
+            otpSent={otpSent}
+            otpBusy={otpBusy}
+            otpVerified={checkoutOtpVerified}
+            otpMessage={otpMessage}
+            otpError={otpError}
+            resendAfter={resendAfter}
+            onOtpChange={setOtp}
+            onSendOtp={handleSendOtp}
+            onVerifyOtp={handleVerifyOtp}
+          />
 
           <div className="card card-padded" style={{ marginBottom: 20 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -281,7 +280,7 @@ function Checkout() {
           <div className="card card-padded" style={{ marginBottom: 20 }}>
             <h3>Payment method</h3>
             <div className="payment-method-options">
-              {['CARD', 'PAYPAL', 'BANK_TRANSFER'].map((method) => (
+              {['CARD', 'PAYPAL', 'BANK_TRANSFER', 'COD'].map((method) => (
                 <label key={method} className="payment-method-option">
                   <input
                     type="radio"
@@ -290,16 +289,18 @@ function Checkout() {
                     checked={paymentMethod === method}
                     onChange={() => setPaymentMethod(method)}
                   />
-                  {method === 'CARD' ? 'Credit / Debit Card' : method === 'PAYPAL' ? 'PayPal' : 'Bank Transfer'}
+                  {method === 'CARD' ? 'Credit / Debit Card' : method === 'PAYPAL' ? 'PayPal' : method === 'BANK_TRANSFER' ? 'Bank Transfer' : 'Cash on Delivery (COD)'}
                 </label>
               ))}
             </div>
             <p className="payment-simulation-note">
-              Payments are simulated. No card details are collected or sent to a payment provider.
+              {paymentMethod === 'COD'
+                ? 'Cash is due on delivery. No cash or payment credentials are collected during this simulated checkout.'
+                : 'Payments are simulated. No card details are collected or sent to a payment provider.'}
             </p>
           </div>
 
-          <button className="btn btn-primary btn-block" type="submit" disabled={verifiedEmail !== targetEmail || otpBusy || checkingEmailStatus}>
+          <button className="btn btn-primary btn-block" type="submit" disabled={!checkoutOtpVerified || otpBusy || checkingEmailStatus}>
             Continue to Fraud Verification
           </button>
         </form>

@@ -124,8 +124,8 @@ def test_unverified_email_blocks_fraud_checkout_and_direct_order_submission(data
     database.commit()
     request = main.CreateOrderRequest(
         transaction_id=txn.id, items=[{"product_id": "p1", "quantity": 1}], payment_method="CARD",
-        shipping_address={"full_name": "A", "line1": "B", "city": "C", "postal_code": "D", "country": "E"},
-        billing_address={"full_name": "A", "line1": "B", "city": "C", "postal_code": "D", "country": "E"},
+        shipping_address={"full_name": "A", "line1": "B", "city": "C", "postal_code": "560001", "country": "India"},
+        billing_address={"full_name": "A", "line1": "B", "city": "C", "postal_code": "560001", "country": "India"},
     )
     with pytest.raises(HTTPException) as blocked:
         main.create_order(request, database, user)

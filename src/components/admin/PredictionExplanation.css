@@ -1,438 +1,702 @@
 /* PredictionExplanation.css
-   Modern, compact, structured explainability panels for fraud predictions */
+   Modern, enterprise fraud investigation interface styling */
 
 .prediction-explanation {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
   width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  overflow-x: hidden;
 }
 
-/* State displays */
-.prediction-explanation-state {
+/* Compact Investigation Header */
+.investigation-header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 32px 20px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  color: #64748b;
-  font-size: 13.5px;
-}
-
-.prediction-state-error {
-  border-color: #fecaca;
-  background: #fef2f2;
-  color: #b91c1c;
-}
-
-/* Card layout */
-.prediction-top-grid {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 16px;
-  width: 100%;
-}
-
-.prediction-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 18px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-  min-width: 0;
-}
-
-.prediction-card-header {
-  display: flex;
-  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid #f1f5f9;
-  padding-bottom: 10px;
-  margin-bottom: 2px;
+  gap: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e2e8f0;
+  flex-wrap: wrap;
 }
 
-.prediction-card-kicker {
-  display: block;
-  font-size: 10.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: #2563eb;
-  margin-bottom: 2px;
-}
-
-.prediction-card-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.card-header-note {
-  font-size: 12px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-/* Data Key-Value Grid */
-.prediction-data-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-}
-
-.data-item {
+.header-meta-group {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: #f8fafc;
-  border: 1px solid #edf2f7;
-  border-radius: 6px;
-  padding: 10px 12px;
-  min-width: 0;
 }
 
-.data-label {
-  font-size: 11px;
-  font-weight: 700;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.data-val {
-  font-size: 13px;
-  color: #0f172a;
-  font-weight: 600;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-wrap: anywhere;
-}
-
-.data-subval {
-  font-size: 11.5px;
-  color: #64748b;
-  font-weight: 400;
-}
-
-.score-highlight {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 15px;
-  font-weight: 800;
-  color: #1e3a5f;
-}
-
-.rule-tag {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
-  color: #334155;
-  background: #edf2f7;
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.prediction-workflow-notice {
-  font-size: 12px;
-  color: #64748b;
-  line-height: 1.45;
-  margin-top: 4px;
-  padding-top: 8px;
-  border-top: 1px dashed #e2e8f0;
-}
-
-.prediction-workflow-notice p {
-  margin: 0;
-}
-
-.prediction-review-actions {
+.header-kicker-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid #fde68a;
-  border-radius: 6px;
-  background: #fffbeb;
-  color: #78350f;
-  font-size: 13px;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #2563eb;
 }
 
-.prediction-review-actions p {
+.investigation-kicker {
+  color: #2563eb;
+}
+
+.investigation-ref {
+  color: #64748b;
+}
+
+.dot-divider {
+  color: #cbd5e1;
+}
+
+.investigation-title {
   margin: 0;
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.02em;
 }
 
-.prediction-review-buttons {
-  display: flex;
-  gap: 8px;
-}
-
-.prediction-review-buttons .btn-review-approve,
-.prediction-review-buttons .btn-review-reject {
-  padding: 7px 12px;
-  border-radius: 5px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.prediction-review-buttons .btn-review-approve {
-  background: #059669;
-  color: #fff;
-  border: 1px solid #047857;
-}
-
-.prediction-review-buttons .btn-review-reject {
-  background: #fff;
-  color: #dc2626;
-  border: 1px solid #f87171;
-}
-
-.prediction-review-buttons button:disabled {
-  cursor: wait;
-  opacity: 0.65;
-}
-
-.prediction-review-feedback {
-  padding: 10px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-}
-
-.prediction-review-success {
-  background: #ecfdf5;
-  color: #047857;
-}
-
-.prediction-review-warning {
-  background: #fffbeb;
-  color: #92400e;
-}
-
-.prediction-review-error {
-  background: #fef2f2;
-  color: #b91c1c;
-}
-
-/* Feature Inputs Dense Grid */
-.prediction-features-dense-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 8px;
-}
-
-.feature-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 8px 10px;
-  background: #f8fafc;
-  border: 1px solid #edf2f7;
-  border-radius: 6px;
-  min-width: 0;
-}
-
-.feature-name {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+.header-customer-name {
   font-weight: 600;
   color: #475569;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 18px;
 }
 
-.feature-value {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.header-right-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-amount-box {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 6px 14px;
+  border-radius: 8px;
+}
+
+.amount-label {
   font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.header-amount-val {
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+/* 4-Item Risk Overview Grid */
+.fraud-risk-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+
+.risk-overview-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+}
+
+.risk-overview-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+.risk-overview-val {
+  font-size: 22px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.risk-overview-subtext {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.model-val-text {
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-version-tag {
+  font-size: 11px;
+  font-weight: 700;
+  background: #eff6ff;
+  color: #2563eb;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid #bfdbfe;
+}
+
+.risk-decisions-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.decision-pill-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.decision-micro-label {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+/* Why This Transaction Needs Attention Panel */
+.attention-panel {
+  background: #fffdf5;
+  border: 1px solid #fef08a;
+  border-left: 4px solid #eab308;
+  border-radius: 8px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attention-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #854d0e;
+}
+
+.attention-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #713f12;
+  line-height: 1.5;
+}
+
+/* Main Split Grid */
+.investigation-main-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 20px;
+}
+
+.investigation-col {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Investigation Cards */
+.investigation-card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  display: flex;
+  flex-direction: column;
+}
+
+.investigation-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid #f1f5f9;
+  padding-bottom: 10px;
+}
+
+.investigation-card-title {
+  margin: 0;
+  font-size: 15px;
   font-weight: 700;
   color: #0f172a;
-  overflow-wrap: anywhere;
 }
 
-.feature-missing {
+.investigation-card-meta {
+  font-size: 12px;
   color: #94a3b8;
-  font-style: italic;
-  font-weight: 400;
 }
 
-/* Feature Attribution Table */
-.attribution-table-wrap {
+/* Features Table */
+.investigation-table {
   width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  overflow-x: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  scrollbar-width: thin;
-}
-
-.attribution-table {
-  width: 100%;
-  table-layout: fixed;
   border-collapse: collapse;
   font-size: 13px;
   text-align: left;
 }
 
-.attribution-table th:nth-child(1),
-.attribution-table td:nth-child(1) {
-  width: 44%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.attribution-table th:nth-child(2),
-.attribution-table td:nth-child(2) {
-  width: 28%;
-  white-space: nowrap;
-}
-
-.attribution-table th:nth-child(3),
-.attribution-table td:nth-child(3) {
-  width: 28%;
-  text-align: right;
-}
-
-.attribution-table th {
+.investigation-table th {
   background: #f8fafc;
   color: #475569;
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-bottom: 1px solid #e2e8f0;
 }
 
-.attribution-table td {
-  padding: 10px 14px;
+.investigation-table td {
+  padding: 10px 12px;
   border-bottom: 1px solid #f1f5f9;
   vertical-align: middle;
 }
 
-.attribution-table tbody tr:last-child td {
+.investigation-table tr:last-child td {
   border-bottom: none;
 }
 
-.attr-feat-name strong {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  color: #1e293b;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-.contribution-num {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.feat-name-cell {
+  font-weight: 600;
+  color: #334155;
   font-size: 12.5px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
 }
 
-.num-positive {
-  color: #b91c1c;
-  background: #fef2f2;
-}
-
-.num-negative {
-  color: #047857;
-  background: #ecfdf5;
-}
-
-.num-neutral {
-  color: #475569;
+.unknown-pill {
+  display: inline-block;
+  padding: 2px 7px;
   background: #f1f5f9;
+  color: #64748b;
+  border-radius: 4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-family: monospace;
 }
 
-.attr-feat-dir {
-  text-align: right;
+.feat-val-text {
+  color: #0f172a;
+  font-weight: 600;
 }
 
-.prediction-model-totals {
+.table-footnote {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.45;
+}
+
+/* Graph Context Grid */
+.graph-context-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.graph-context-item {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.graph-item-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.graph-item-val {
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.graph-neutral-notice {
+  margin-top: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.graph-neutral-notice svg {
+  color: #64748b;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Review Card */
+.review-card {
+  border-color: #cbd5e1;
+}
+
+.review-meta-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.review-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.review-meta-item.full-width {
+  grid-column: 1 / -1;
+}
+
+.review-meta-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.review-meta-val {
+  font-size: 13.5px;
+  color: #0f172a;
+}
+
+.review-reason-text {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #334155;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 8px 12px;
+  line-height: 1.45;
+}
+
+.text-green { color: #15803d; }
+.text-red { color: #dc2626; }
+.text-amber { color: #b45309; }
+
+/* Review Actions */
+.review-action-section {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.high-risk-checks-block {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checks-instruction {
+  margin: 0;
+  font-size: 12.5px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.assessment-summary-callout {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #334155;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ack-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #1e293b;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ack-checkbox-label input {
+  margin-top: 2px;
+  cursor: pointer;
+}
+
+.review-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.review-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.admin-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #0f172a;
+  background: #ffffff;
+  resize: vertical;
+}
+
+.admin-textarea:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.review-button-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
-  background: #f8fafc;
+}
+
+.btn-review-approve {
+  flex: 1;
+  padding: 10px 16px;
   border-radius: 6px;
-  border: 1px solid #edf2f7;
-  font-size: 12px;
+  background: #059669;
+  color: #ffffff;
+  border: 1px solid #047857;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-review-approve:hover:not(:disabled) {
+  background: #047857;
+}
+
+.btn-review-approve:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-review-reject {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #dc2626;
+  border: 1px solid #f87171;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-review-reject:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.btn-review-reject:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Confirmation Box */
+.review-confirm-box {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.review-confirm-box p {
+  margin: 0;
+  font-size: 13px;
+  color: #991b1b;
+}
+
+.confirm-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-confirm-approve {
+  padding: 8px 16px;
+  background: #059669;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.btn-confirm-reject {
+  padding: 8px 16px;
+  background: #dc2626;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.prediction-review-feedback {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.prediction-review-success {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+}
+
+.prediction-review-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.prediction-review-warning {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+}
+
+/* Collapsible Technical Details */
+.investigation-tech-details {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.investigation-tech-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #475569;
+  user-select: none;
+}
+
+.investigation-tech-details summary:hover {
+  color: #0f172a;
+}
+
+.tech-details-content {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 12.5px;
+}
+
+.tech-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   color: #475569;
 }
 
-.dot-divider {
-  color: #94a3b8;
-  font-size: 16px;
-}
-
-.prediction-unavailable {
-  padding: 16px;
-  background: #f8fafc;
-  border: 1px dashed #cbd5e1;
-  border-radius: 6px;
-  color: #64748b;
-  font-size: 13px;
-  text-align: center;
-}
-
-.prediction-disclaimer {
+/* State screens */
+.prediction-explanation-state {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid #f1f5f9;
-  font-size: 12px;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
   color: #64748b;
-  line-height: 1.4;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  gap: 12px;
 }
 
-.prediction-disclaimer svg {
-  flex-shrink: 0;
-  color: #94a3b8;
+.prediction-state-error {
+  border-color: #fecaca;
+  background: #fff5f5;
+  color: #991b1b;
 }
 
 /* Responsive */
-@media (max-width: 900px) {
-  .prediction-top-grid {
+@media (max-width: 1080px) {
+  .fraud-risk-overview-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .investigation-main-grid {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 600px) {
-  .prediction-card-header {
+@media (max-width: 640px) {
+  .investigation-header {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  .prediction-features-dense-grid {
+  .header-right-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .fraud-risk-overview-grid {
     grid-template-columns: 1fr;
   }
 
-  .attribution-table {
-    min-width: 440px;
+  .graph-context-grid {
+    grid-template-columns: 1fr;
   }
 
-  .prediction-model-totals {
+  .review-button-row {
     flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-  }
-
-  .dot-divider {
-    display: none;
   }
 }

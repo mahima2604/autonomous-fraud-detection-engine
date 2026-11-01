@@ -58,6 +58,49 @@ def _raw_features(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def compute_risk_policy_bands(
+    labels: np.ndarray,
+    scores: np.ndarray,
+    review_threshold: float = REVIEW_THRESHOLD,
+    block_threshold: float = BLOCK_THRESHOLD,
+) -> Dict[str, Any]:
+    """Describe historical label mix routed to each band without tuning cutoffs."""
+    labels = np.asarray(labels)
+    scores = np.asarray(scores, dtype=float)
+    if len(labels) != len(scores) or not np.isfinite(scores).all():
+        raise ValueError("Labels and finite model scores must have matching lengths")
+    if not (0 < review_threshold < block_threshold < 1):
+        raise ValueError("Risk thresholds must satisfy 0 < review < block < 1")
+
+    masks = {
+        "LOW": scores <= review_threshold,
+        "MEDIUM": (scores > review_threshold) & (scores <= block_threshold),
+        "HIGH": scores > block_threshold,
+    }
+    total_fraud = int(np.sum(labels == 1))
+    total_genuine = int(np.sum(labels == 0))
+    results = {}
+    for band, mask in masks.items():
+        count = int(mask.sum())
+        fraud = int(np.sum(labels[mask] == 1))
+        genuine = int(np.sum(labels[mask] == 0))
+        results[band] = {
+            "transactions": count,
+            "share_of_transactions": count / len(labels) if len(labels) else 0.0,
+            "fraud_transactions": fraud,
+            "genuine_transactions": genuine,
+            "observed_fraud_rate": fraud / count if count else 0.0,
+            "share_of_fraud_class": fraud / total_fraud if total_fraud else 0.0,
+            "share_of_genuine_class": genuine / total_genuine if total_genuine else 0.0,
+        }
+    return {
+        "review_threshold": review_threshold,
+        "block_threshold": block_threshold,
+        "interpretation": "Historical class composition at configured policy cutoffs; not storefront calibration or a causal effect of verification.",
+        "bands": results,
+    }
+
+
 def sample_train(frame: pd.DataFrame, max_legit_per_fraud: int = 5) -> pd.DataFrame:
     fraud = frame[frame.isFraud == 1]
     legit = frame[frame.isFraud == 0]
@@ -191,6 +234,9 @@ def execute_benchmark_evaluation(
     pos_idx = list(baseline_pipeline.classes_).index(1)
     baseline_probs = baseline_pipeline.predict_proba(x_test_baseline)[:, pos_idx]
     baseline_metrics = compute_metrics(y_test, baseline_probs, DEFAULT_THRESHOLD)
+    baseline_validation_probs = baseline_pipeline.predict_proba(
+        _raw_features(validation)[FEATURE_COLS]
+    )[:, pos_idx]
 
     # 5. Evaluate GraphSAGE
     def _preprocess(frame):
@@ -212,6 +258,21 @@ def execute_benchmark_evaluation(
         if "isFraud" in raw:
             res["isFraud"] = raw["isFraud"].to_numpy()
         return res
+
+    validation_raw_all = pd.concat([train, validation], ignore_index=True)
+    validation_processed_all = pd.concat([train_processed, val_processed], ignore_index=True)
+    validation_graph = build_homogeneous_transaction_graph(
+        _graph_frame(validation_raw_all, validation_processed_all),
+        FEATURE_COLS,
+        EDGE_COLS,
+        max_neighbors=int(gs_meta.get("max_neighbors", 10)),
+        edge_frame=validation_raw_all[["TransactionDT", *EDGE_COLS]],
+    )
+    validation_start = len(train)
+    with torch.no_grad():
+        validation_graph = validation_graph.to(device)
+        validation_logits = gnn_model(validation_graph.x, validation_graph.edge_index)
+        gnn_validation_probs = torch.sigmoid(validation_logits[validation_start:]).cpu().numpy()
 
     test_raw_all = pd.concat([train, validation, test], ignore_index=True)
     test_processed_all = pd.concat([train_processed, val_processed, test_processed], ignore_index=True)
@@ -322,11 +383,19 @@ def execute_benchmark_evaluation(
                 "name": "GraphSAGE (Causal Temporal Graph)",
                 "description": "2-layer GraphSAGE with categorical embedding layers and causal temporal neighbor aggregation.",
                 "metrics": gnn_metrics,
+                "risk_policy_bands": {
+                    "validation": compute_risk_policy_bands(validation["isFraud"].to_numpy(), gnn_validation_probs),
+                    "independent_test": compute_risk_policy_bands(y_test, gnn_probs),
+                },
             },
             "logistic_regression": {
                 "name": "Logistic Regression Baseline",
                 "description": "Standard balanced-class Logistic Regression with OneHotEncoder and StandardScaler.",
                 "metrics": baseline_metrics,
+                "risk_policy_bands": {
+                    "validation": compute_risk_policy_bands(validation["isFraud"].to_numpy(), baseline_validation_probs),
+                    "independent_test": compute_risk_policy_bands(y_test, baseline_probs),
+                },
             },
         },
         "model_comparison": {
@@ -343,7 +412,7 @@ def execute_benchmark_evaluation(
             "Benchmark performance on historical IEEE-CIS data does NOT establish real-world fraud detection accuracy on the live storefront.",
             "Storefront product categories (e.g. Audio, Wearables) have no verified semantic mapping to IEEE-CIS ProductCD codes (W, C, R, H, S).",
             "Live checkout builds GraphSAGE edges using the saved model's P_emaildomain and DeviceInfo schema. P_emaildomain comes from the authenticated account email, but checkout has no trustworthy DeviceInfo value; live graph topology validation therefore remains insufficient and must not be treated as fully validated.",
-            "The existing REVIEW safeguard remains active when required live graph inputs or a verified ProductCD mapping are unavailable; historical benchmark scores do not override that decision.",
+            "Historical threshold-band distributions are descriptive and do not prove storefront calibration or set a validated fraud-cost tradeoff. Missing storefront product/device mappings remain visible data limitations and are not fabricated.",
         ],
         "execution_metadata": {
             "device": str(device),

@@ -41,3 +41,9 @@ Thumbs.db
 .pytest-deep-pred-review-controls/
 .pytest-tmp/
 backend/pytest-run-*/
+
+# Temporary test artifacts
+.pytest-securecart-*/
+.pytest-rerun-*/
+.pytest-tmp-*/
+.test-tmp-*/

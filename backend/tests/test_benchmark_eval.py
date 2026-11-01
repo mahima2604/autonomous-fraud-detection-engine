@@ -17,7 +17,7 @@ from app import main
 from app.database.session import Base
 from app.models.admin import Admin
 from app.models.user import User
-from app.ml.benchmark_eval import compute_metrics, get_or_run_benchmark
+from app.ml.benchmark_eval import compute_metrics, compute_risk_policy_bands, get_or_run_benchmark
 from app.services.auth import (
     create_access_token,
     create_admin_access_token,
@@ -68,6 +68,21 @@ def test_compute_metrics_with_errors():
     assert res["f1"] == 0.5
 
 
+def test_risk_policy_band_metrics_count_genuine_and_fraud_without_tuning():
+    labels = np.array([0, 0, 1, 1, 0, 1])
+    scores = np.array([0.10, 0.40, 0.80, 0.50, 0.30, 0.75])
+    result = compute_risk_policy_bands(labels, scores, 0.30, 0.70)
+    assert result["bands"]["LOW"]["transactions"] == 2
+    assert result["bands"]["LOW"]["genuine_transactions"] == 2
+    assert result["bands"]["LOW"]["fraud_transactions"] == 0
+    assert result["bands"]["MEDIUM"]["transactions"] == 2
+    assert result["bands"]["MEDIUM"]["genuine_transactions"] == 1
+    assert result["bands"]["MEDIUM"]["fraud_transactions"] == 1
+    assert result["bands"]["HIGH"]["transactions"] == 2
+    assert result["bands"]["HIGH"]["fraud_transactions"] == 2
+    assert "not storefront calibration" in result["interpretation"]
+
+
 def test_benchmark_data_structure_and_values():
     benchmark = get_or_run_benchmark(force_refresh=False)
 
@@ -113,7 +128,6 @@ def test_benchmark_data_structure_and_values():
     topology_warning = next(w for w in warnings if "saved model's P_emaildomain and DeviceInfo schema" in w)
     assert "no trustworthy DeviceInfo value" in topology_warning
     assert "remains insufficient" in topology_warning
-    assert any("existing REVIEW safeguard remains active" in w for w in warnings)
     assert not any("account-isolated graph topology" in w for w in warnings)
 
 

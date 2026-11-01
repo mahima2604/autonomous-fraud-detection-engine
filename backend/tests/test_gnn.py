@@ -12,6 +12,11 @@ from app.models.fraud_prediction import FraudPrediction
 from app.models.user import User
 from app.models.email_verification import EmailVerification
 from app.database.session import Base
+from app.ml.device_info_v2 import (
+    DEVICE_INFO_V2_SOURCE,
+    build_training_device_platform,
+    normalize_browser_platform_hint,
+)
 
 
 def verify_test_email(db, user):
@@ -26,8 +31,8 @@ def verify_test_email(db, user):
 
 
 @pytest.fixture
-def database(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'gnn.sqlite'}")
+def database():
+    engine = create_engine("sqlite://")
     Base.metadata.create_all(bind=engine)
     session = sessionmaker(bind=engine)()
     try:
@@ -73,6 +78,356 @@ def test_saved_training_and_serving_graph_schemas_match():
     assert list(main.gnn_metadata["categorical_features"]) == train.CATEGORICAL_COLS
     assert main.gnn_metadata["in_channels"] == len(train.FEATURE_COLS)
     assert main.gnn_metadata["max_neighbors"] == 10
+
+
+def test_device_info_v2_uses_verified_os_training_field_and_strict_browser_allowlist():
+    assert build_training_device_platform("Windows 10") == "Windows"
+    assert build_training_device_platform("Mac OS X 10_13_6") == "MacOS"
+    assert build_training_device_platform("iOS 11.2.1") == "iOS"
+    assert build_training_device_platform("Android 7.0") == "Android"
+    assert build_training_device_platform("Linux") == "Linux"
+    assert build_training_device_platform(None) == "UNKNOWN"
+    assert normalize_browser_platform_hint("Windows") == "Windows"
+    assert normalize_browser_platform_hint("MacIntel") == "MacOS"
+    assert normalize_browser_platform_hint("Mozilla/5.0 (Windows NT 10.0)") == "UNKNOWN"
+    assert normalize_browser_platform_hint("random-device-id") == "UNKNOWN"
+
+
+def test_device_info_v2_scoring_persists_platform_but_keeps_review_and_ignores_raw_deviceinfo(database, monkeypatch):
+    user = User(name="V2 Platform Buyer", email="platform-v2@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.commit()
+    database.refresh(user)
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "gnn_device_v2")
+    assert main.device_info_v2_loaded and main.device_info_v2_model is not None
+
+    response = main.predict_fraud(
+        main.TransactionInput(
+            TransactionAmt=129.0,
+            ProductCD="C",
+            DeviceType="desktop",
+            DeviceInfo="untrusted arbitrary body value",
+            DevicePlatformHint="Windows",
+        ),
+        db=database,
+        current_user=user,
+    )
+    saved = database.query(main.Transaction).filter(main.Transaction.id == response.transaction_id).one()
+    prediction = database.query(FraudPrediction).filter(FraudPrediction.transaction_id == saved.id).one()
+    assert saved.transaction_data["DeviceInfo"] == "Windows"
+    assert saved.transaction_data["DeviceInfoSource"] == DEVICE_INFO_V2_SOURCE
+    assert prediction.model_used == "GraphSAGE_DeviceInfo_v2"
+    assert prediction.decision == "REVIEW"
+    assert saved.status == "REVIEW"
+
+
+def test_device_info_v2_graph_never_uses_platform_family_as_an_edge(database):
+    assert main.device_info_v2_loaded
+    first_user = User(name="Windows Buyer", email="buyer@first-platform.example", hashed_password="test-hash")
+    second_user = User(name="Windows Buyer Two", email="buyer@second-platform.example", hashed_password="test-hash")
+    database.add_all([first_user, second_user])
+    database.commit()
+    first = main.Transaction(
+        user_id=first_user.id, amount=25, transaction_data={
+            "TransactionAmt": 25, "ProductCD": "C", "P_emaildomain": "first-platform.example",
+            "DeviceType": "desktop", "DeviceInfo": "Windows", "DeviceInfoSource": DEVICE_INFO_V2_SOURCE,
+        }, status="REVIEW",
+    )
+    database.add(first)
+    database.commit()
+    graph, context = main._build_live_device_info_v2_graph(
+        {
+            "TransactionAmt": 30, "ProductCD": "C", "DeviceType": "desktop",
+            "DeviceInfo": "Windows", "DeviceInfoSource": DEVICE_INFO_V2_SOURCE,
+        },
+        second_user,
+        database,
+    )
+    assert graph.edge_index.numel() == 0
+    assert context["training_topology"] == "P_emaildomain"
+    assert "DeviceInfo" not in context["training_topology"]
+
+
+def test_catalog_codes_and_checkout_features_come_from_trusted_products(database, monkeypatch):
+    from app.catalog import SAMPLE_CATALOG
+
+    expected_codes = {"W", "C", "R", "H", "S"}
+    encoder_codes = set(main.gnn_encoders["ProductCD"].classes_) - {"UNKNOWN"}
+    baseline_codes = set(main.baseline_product_cd_values or ())
+    assert {product["ProductCD"] for product in SAMPLE_CATALOG} == expected_codes
+    assert expected_codes == encoder_codes
+    assert expected_codes == baseline_codes
+    assert len({product["id"] for product in SAMPLE_CATALOG}) == len(SAMPLE_CATALOG)
+    assert {product["name"] for product in SAMPLE_CATALOG} == {
+        "Aurora Wireless Headphones",
+        "Pulse Fitness Tracker",
+        "Cascade Mechanical Keyboard",
+        "Nimbus Backpack",
+        "Halo Desk Lamp",
+    }
+    assert main.get_product_by_id("p2")["ProductCD"] == "C"
+
+    user = User(name="Catalog Buyer", email="catalog@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.commit()
+    verify_test_email(database, user)
+    captured = {}
+
+    def capture_features(features, *_args):
+        captured.update(features)
+        return 0.1, "GraphSAGE"
+
+    monkeypatch.setattr(main, "score_transaction", capture_features)
+    address = {
+        "full_name": "Catalog Buyer", "line1": "1 Example Road", "city": "Example City",
+        "postal_code": "560001", "country": "India", "address_confirmed": True,
+    }
+    snapshot = {
+        "items": [{"product_id": "p2", "quantity": 1, "price": 0.01, "ProductCD": "S"}],
+        "shipping_address": address,
+        "billing_address": {key: value for key, value in address.items() if key != "address_confirmed"},
+    }
+    response = main.predict_fraud(
+        main.TransactionInput(TransactionAmt=79.5, ProductCD="S", checkout_snapshot=snapshot),
+        db=database,
+        current_user=user,
+    )
+    saved = database.query(main.Transaction).one()
+    assert saved.transaction_data["ProductCD"] == "C"
+    assert saved.transaction_data["TransactionAmt"] == 79.5
+    assert captured["ProductCD"] == "C"
+    assert captured["TransactionAmt"] == 79.5
+    assert response.decision == "REVIEW"  # All transactions remain pending administrator review.
+    assert response.score_based_decision == "APPROVE"  # Model score classification is preserved.
+    assert saved.status == "REVIEW"
+
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+    monkeypatch.setattr(main, "score_transaction", lambda *_args: (0.1, "LogisticRegression_Baseline"))
+    mixed_snapshot = {
+        "items": [{"product_id": "p1", "quantity": 1}, {"product_id": "p2", "quantity": 1}],
+        "shipping_address": address,
+        "billing_address": {key: value for key, value in address.items() if key != "address_confirmed"},
+    }
+    mixed_response = main.predict_fraud(
+        main.TransactionInput(TransactionAmt=208.5, ProductCD="W", checkout_snapshot=mixed_snapshot),
+        db=database,
+        current_user=user,
+    )
+    mixed_transaction = database.query(main.Transaction).filter_by(id=mixed_response.transaction_id).one()
+    assert mixed_transaction.transaction_data["ProductCD"] == "UNKNOWN"
+    assert mixed_response.score_based_decision == "APPROVE"
+    assert mixed_response.decision == "REVIEW"
+    assert mixed_transaction.status == "REVIEW"
+    assert mixed_response.review_reason and "ProductCD is unavailable" in mixed_response.review_reason
+
+
+@pytest.mark.parametrize(
+    ("product_id", "product_code"),
+    [("p1", "W"), ("p2", "C"), ("p3", "R"), ("p4", "H"), ("p5", "S")],
+)
+def test_each_catalog_product_uses_a_code_supported_by_both_saved_encoders(product_id, product_code):
+    _, priced_items, trusted_total = main.validate_checkout_items(
+        [{"product_id": product_id, "quantity": 2, "price": -1, "ProductCD": "tampered"}]
+    )
+
+    assert priced_items[0]["product_id"] == product_id
+    assert priced_items[0]["ProductCD"] == product_code
+    assert trusted_total == 2 * main.get_product_by_id(product_id)["price"]
+    assert main.product_cd_review_reason({"ProductCD": product_code}, "GraphSAGE") is None
+    assert main.product_cd_review_reason({"ProductCD": product_code}, "LogisticRegression_Baseline") is None
+
+
+def test_unsupported_productcd_holds_low_score_for_admin_review(database, monkeypatch):
+    user = User(name="Unsupported Code Buyer", email="unsupported@example.test", hashed_password="test-hash")
+    admin = main.Admin(email="catalog-reviewer@example.test", hashed_password="test-hash")
+    database.add_all([user, admin])
+    database.commit()
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+    monkeypatch.setattr(main, "score_transaction", lambda *_args: (0.1, "LogisticRegression_Baseline"))
+
+    response = main.predict_fraud(
+        main.TransactionInput(TransactionAmt=20.0, ProductCD="Audio"),
+        db=database,
+        current_user=user,
+    )
+
+    transaction = database.query(main.Transaction).one()
+    assert response.score_based_decision == "APPROVE"
+    assert response.decision == "REVIEW"
+    assert transaction.status == "REVIEW"
+    assert response.review_reason and "outside the fitted training categories" in response.review_reason
+    pending = main.get_pending_reviews(db=database, current_admin=admin)
+    assert len(pending) == 1
+    assert pending[0]["fraud_prediction"]["operational_decision"] == "REVIEW"
+    approved = main.approve_review(
+        transaction.id,
+        main.AdminReviewRequest(reason="Reviewed unsupported ProductCD input."),
+        db=database,
+        current_admin=admin,
+    )
+    assert approved["status"] == "REVIEW_APPROVED"
+    assert approved["review_decision"] == "APPROVE"
+    assert transaction.status == "REVIEW_APPROVED"
+
+
+def test_graph_validation_fallback_is_held_for_admin_review(database, monkeypatch):
+    user = User(name="Graph Fallback Buyer", email="fallback@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.commit()
+
+    def fail_graph(*_args, **_kwargs):
+        raise RuntimeError("graph validation unavailable")
+
+    class LowScorePipeline:
+        named_steps = main.baseline_pipeline.named_steps
+
+        def predict_proba(self, _frame):
+            return np.array([[0.9, 0.1]])
+
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "gnn")
+    monkeypatch.setattr(main, "FALLBACK_FRAUD_MODEL", "logistic_regression")
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+    monkeypatch.setattr(main, "baseline_pipeline", LowScorePipeline())
+    monkeypatch.setattr(main, "_build_live_gnn_graph", fail_graph)
+
+    response = main.predict_fraud(
+        main.TransactionInput(TransactionAmt=20.0, ProductCD="W"),
+        db=database,
+        current_user=user,
+    )
+
+    transaction = database.query(main.Transaction).one()
+    assert response.model_used == "LogisticRegression_Baseline_Fallback"
+    assert response.score_based_decision == "APPROVE"
+    assert response.decision == "REVIEW"
+    assert transaction.status == "REVIEW"
+    assert response.review_reason and "GraphSAGE inference failed" in response.review_reason
+
+
+def test_graph_validation_error_without_fallback_returns_unavailable(database, monkeypatch):
+    user = User(name="Graph Error Buyer", email="graph-error@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.commit()
+
+    def fail_prediction(*_args, **_kwargs):
+        raise RuntimeError("graph validation unavailable")
+
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "gnn")
+    monkeypatch.setattr(main, "FALLBACK_FRAUD_MODEL", "")
+    monkeypatch.setattr(main, "predict_with_gnn", fail_prediction)
+
+    with pytest.raises(main.HTTPException) as unavailable:
+        main.predict_fraud(
+            main.TransactionInput(TransactionAmt=20.0, ProductCD="W"),
+            db=database,
+            current_user=user,
+        )
+
+    assert unavailable.value.status_code == 503
+    assert database.query(main.Transaction).count() == 0
+    assert database.query(FraudPrediction).count() == 0
+
+
+def test_saved_graph_topology_mismatch_uses_only_explicit_fallback_and_holds_for_review(database, monkeypatch):
+    user = User(name="Topology Mismatch Buyer", email="topology-mismatch@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.commit()
+
+    class LowScorePipeline:
+        named_steps = main.baseline_pipeline.named_steps
+
+        def predict_proba(self, _frame):
+            return np.array([[0.9, 0.1]])
+
+    monkeypatch.setattr(main, "gnn_metadata", {**main.gnn_metadata, "edge_features": ["P_emaildomain"]})
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "gnn")
+    monkeypatch.setattr(main, "FALLBACK_FRAUD_MODEL", "logistic_regression")
+    monkeypatch.setattr(main, "artifacts_loaded", True)
+    monkeypatch.setattr(main, "baseline_pipeline", LowScorePipeline())
+
+    response = main.predict_fraud(
+        main.TransactionInput(TransactionAmt=20.0, ProductCD="W"),
+        db=database,
+        current_user=user,
+    )
+
+    transaction = database.query(main.Transaction).one()
+    assert response.model_used == "LogisticRegression_Baseline_Fallback"
+    assert response.score_based_decision == "APPROVE"
+    assert response.decision == "REVIEW"
+    assert transaction.status == "REVIEW"
+    assert response.review_reason and "GraphSAGE inference failed" in response.review_reason
+
+
+def test_missing_deviceinfo_is_unvalidated_but_keeps_existing_checkout_score_policy(database, monkeypatch):
+    user = User(name="Missing DeviceInfo Buyer", email="missing-device@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.commit()
+    verify_test_email(database, user)
+    address = {
+        "full_name": "Missing DeviceInfo Buyer", "line1": "1 Example Road", "city": "Example City",
+        "postal_code": "560001", "country": "India", "address_confirmed": True,
+    }
+    topology = {}
+
+    def capture_unvalidated_graph(features, current_user, db):
+        _, topology["context"] = main._build_live_gnn_graph(features, current_user, db)
+        return 0.1, "GraphSAGE"
+
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "gnn")
+    monkeypatch.setattr(main, "score_transaction", capture_unvalidated_graph)
+    snapshot = {
+        "items": [{"product_id": "p1", "quantity": 1}],
+        "shipping_address": address,
+        "billing_address": {key: value for key, value in address.items() if key != "address_confirmed"},
+    }
+    response = main.predict_fraud(
+        main.TransactionInput(TransactionAmt=129.0, checkout_snapshot=snapshot),
+        db=database,
+        current_user=user,
+    )
+
+    transaction = database.query(main.Transaction).one()
+    assert transaction.transaction_data["DeviceInfo"] == "UNKNOWN"
+    assert topology["context"]["topology_validation_status"] == "UNVALIDATED_INSUFFICIENT_DATA"
+    assert response.decision == "REVIEW"
+    assert response.score_based_decision == "APPROVE"
+    assert transaction.status == "REVIEW"
+
+
+def test_checkout_rejects_unknown_product_id_and_client_amount_override(database, monkeypatch):
+    user = User(name="Tamper Buyer", email="tamper@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.commit()
+    verify_test_email(database, user)
+    address = {
+        "full_name": "Tamper Buyer", "line1": "1 Example Road", "city": "Example City",
+        "postal_code": "560001", "country": "India", "address_confirmed": True,
+    }
+    snapshot = {
+        "items": [{"product_id": "p2", "quantity": 1}],
+        "shipping_address": address,
+        "billing_address": {key: value for key, value in address.items() if key != "address_confirmed"},
+    }
+    with pytest.raises(main.HTTPException) as unknown_product:
+        main.predict_fraud(
+            main.TransactionInput(TransactionAmt=79.5, checkout_snapshot={**snapshot, "items": [{"product_id": "tampered", "quantity": 1}]}),
+            db=database,
+            current_user=user,
+        )
+    assert unknown_product.value.status_code == 422
+
+    monkeypatch.setattr(main, "score_transaction", lambda *_args: (0.1, "GraphSAGE"))
+    with pytest.raises(main.HTTPException) as tampered_amount:
+        main.predict_fraud(
+            main.TransactionInput(TransactionAmt=0.01, ProductCD="W", checkout_snapshot=snapshot),
+            db=database,
+            current_user=user,
+        )
+    assert tampered_amount.value.status_code == 409
+    assert database.query(main.Transaction).count() == 0
 
 
 def test_checkout_model_features_keep_store_categories_separate_from_model_schema():
@@ -125,7 +480,7 @@ def test_checkout_device_metadata_never_infers_training_deviceinfo(
 
 
 @pytest.mark.parametrize("store_category", sorted({product["category"] for product in main.SAMPLE_CATALOG}))
-def test_storefront_categories_remain_unmapped_and_reviewed(store_category):
+def test_storefront_categories_remain_unmapped_and_topology_unvalidated(store_category):
     user = User(name="Mapping Audit Buyer", email="mapping-audit@example.test", hashed_password="test-hash")
     category = store_category
     model_features = main.prepare_checkout_model_features(
@@ -137,8 +492,8 @@ def test_storefront_categories_remain_unmapped_and_reviewed(store_category):
     assert model_features["ProductCD"] == "UNKNOWN"
     assert category not in {str(value) for value in main.gnn_encoders["ProductCD"].classes_}
     review_reason = main.checkout_feature_review_reason(model_features, "GraphSAGE")
-    assert "no verified mapping" in review_reason
-    assert "review" in review_reason.lower()
+    assert "backend-validated dataset code" in review_reason
+    assert "topology remains unvalidated" in review_reason
 
 
 def test_live_graph_uses_training_edge_schema_and_fitted_unknown_encoding(database, monkeypatch):
@@ -233,7 +588,8 @@ def test_metrics_include_live_policy_thresholds_and_original_class_counts(monkey
     assert result["live_policy"]["block"]["confusion_matrix"] == [[2, 0], [1, 1]]
 
 
-def test_trained_artifact_loads_and_scores_live_checkout(database):
+def test_trained_artifact_loads_and_scores_live_checkout(database, monkeypatch):
+    monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "gnn")
     assert main.gnn_artifacts_loaded
     assert main.gnn_metadata["in_channels"] == 5
     assert main.gnn_model is not None
@@ -283,7 +639,7 @@ def test_logistic_regression_artifact_scores_checkout_with_unknown_store_feature
             ProductCD="Audio",
             DeviceType="desktop",
             DeviceInfo="Win32",
-            checkout_snapshot={"items": [{"product_id": "p1", "quantity": 1}], "verified_email": user.email},
+            checkout_snapshot={"items": [{"product_id": "p1", "quantity": 1}], "verified_email": user.email, "shipping_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India", "address_confirmed": True}, "billing_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"}},
         ),
         db=database,
         current_user=user,
@@ -291,15 +647,16 @@ def test_logistic_regression_artifact_scores_checkout_with_unknown_store_feature
 
     assert response.model_used == "LogisticRegression_Baseline"
     assert np.isfinite(response.fraud_probability)
+    assert response.risk_level == main.classify_fraud_score(response.fraud_probability)[0]
     assert response.decision == "REVIEW"
-    assert response.review_reason and "ProductCD is unavailable" in response.review_reason
+    assert response.score_based_decision == ("BLOCK" if response.risk_level == "HIGH" else "REVIEW" if response.risk_level == "MEDIUM" else "APPROVE")
     stored = database.query(main.Transaction).one().transaction_data
-    assert stored["ProductCD"] == "UNKNOWN"
+    assert stored["ProductCD"] == "W"
     assert stored["DeviceInfo"] == "UNKNOWN"
     assert stored["P_emaildomain"] == "example.test"
 
 
-def test_high_score_with_untrained_productcd_is_saved_but_sent_to_manual_review(database, monkeypatch):
+def test_high_score_with_untrained_productcd_is_held_for_admin_review(database, monkeypatch):
     user = User(name="Review Buyer", email="review-buyer@gmail.com", hashed_password="test-hash")
     database.add(user)
     database.commit()
@@ -310,16 +667,18 @@ def test_high_score_with_untrained_productcd_is_saved_but_sent_to_manual_review(
 
     response = main.predict_fraud(
         main.TransactionInput(
-            TransactionAmt=157,
+            TransactionAmt=208.5,
             ProductCD="Audio",
             DeviceType="desktop",
             DeviceInfo="UNKNOWN",
             checkout_snapshot={
                 "verified_email": user.email,
                 "items": [
-                    {"product_id": "p7", "quantity": 1},
-                    {"product_id": "p8", "quantity": 1},
+                    {"product_id": "p1", "quantity": 1},
+                    {"product_id": "p2", "quantity": 1},
                 ],
+                "shipping_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India", "address_confirmed": True},
+                "billing_address": {"full_name": "Buyer", "line1": "1 Road", "city": "City", "postal_code": "560001", "country": "India"},
             },
         ),
         db=database,
@@ -332,7 +691,7 @@ def test_high_score_with_untrained_productcd_is_saved_but_sent_to_manual_review(
     assert response.risk_level == "HIGH"
     assert response.decision == "REVIEW"
     assert response.model_used == "GraphSAGE"
-    assert response.review_reason and "no verified mapping" in response.review_reason
+    assert response.review_reason and "High-risk score" in response.review_reason
     assert stored.fraud_probability == pytest.approx(0.882)
     assert stored.model_used == "GraphSAGE"
     assert stored.decision == "REVIEW"
@@ -342,7 +701,7 @@ def test_high_score_with_untrained_productcd_is_saved_but_sent_to_manual_review(
     explanation = main.build_prediction_explanation(transaction, stored)
     assert explanation["automated_score_decision"] == "BLOCK"
     assert explanation["model_decision"] == "REVIEW"
-    assert explanation["manual_review_reason"] == response.review_reason
+    assert "High-risk score" in explanation["manual_review_reason"]
 
 
 def test_known_training_productcd_preserves_configured_score_decision(database, monkeypatch):
@@ -352,11 +711,7 @@ def test_known_training_productcd_preserves_configured_score_decision(database, 
     monkeypatch.setattr(main, "PRIMARY_FRAUD_MODEL", "logistic_regression")
     monkeypatch.setattr(main, "artifacts_loaded", True)
 
-    class FixedScore:
-        def predict_proba(self, _frame):
-            return np.array([[0.118, 0.882]])
-
-    monkeypatch.setattr(main, "baseline_pipeline", FixedScore())
+    monkeypatch.setattr(main, "score_transaction", lambda *_args: (0.882, "LogisticRegression_Baseline"))
     response = main.predict_fraud(
         main.TransactionInput(TransactionAmt=157, ProductCD="C"),
         db=database,
@@ -364,11 +719,13 @@ def test_known_training_productcd_preserves_configured_score_decision(database, 
     )
 
     assert response.fraud_probability == pytest.approx(0.882)
-    assert response.decision == "BLOCK"
-    assert response.review_reason is None
+    assert response.risk_level == "HIGH"
+    assert response.decision == "REVIEW"
+    assert response.score_based_decision == "BLOCK"
+    assert "High-risk score" in response.review_reason
 
 
-def test_graphsage_score_preserves_review_for_insufficient_live_topology_data(database, monkeypatch):
+def test_graphsage_high_score_is_not_downgraded_by_insufficient_live_topology_data(database, monkeypatch):
     user = User(name="Graph Review Buyer", email="graph-review@example.test", hashed_password="test-hash")
     database.add(user)
     database.commit()
@@ -385,8 +742,9 @@ def test_graphsage_score_preserves_review_for_insufficient_live_topology_data(da
     assert response.fraud_probability == pytest.approx(0.882)
     assert response.risk_level == "HIGH"
     assert response.decision == "REVIEW"
+    assert response.score_based_decision == "BLOCK"
     assert response.model_used == "GraphSAGE"
-    assert response.review_reason and "no trustworthy DeviceInfo source" in response.review_reason
+    assert "High-risk score" in response.review_reason
 
 
 def test_graphsage_explanation_does_not_receive_linear_attribution_and_reports_unvalidated_topology(database, monkeypatch):
@@ -459,6 +817,52 @@ def test_explanation_reports_score_reproduction_failure_when_scores_differ(datab
     assert explanation["score_reproduced"] is False
     assert "does not match stored score" in explanation["reproduction_note"]
     assert explanation["graph_context"]["topology_validation_status"] == "UNVALIDATED_STORED_SCORE_MISMATCH"
+
+
+def test_graph_explanation_distinguishes_schema_mismatch_from_missing_relationship_data(database, monkeypatch):
+    user = User(name="Schema Buyer", email="schema-buyer@example.test", hashed_password="test-hash")
+    database.add(user)
+    database.flush()
+    transaction = main.Transaction(
+        user_id=user.id,
+        amount=42.0,
+        transaction_data={"TransactionAmt": 42.0, "ProductCD": "C", "DeviceInfo": "UNKNOWN"},
+        status="REVIEW",
+    )
+    database.add(transaction)
+    database.flush()
+    prediction = FraudPrediction(
+        transaction_id=transaction.id,
+        fraud_probability=0.4476,
+        risk_level="MEDIUM",
+        decision="REVIEW",
+        score_based_decision="REVIEW",
+        model_used="GraphSAGE",
+    )
+    database.add(prediction)
+    database.commit()
+    monkeypatch.setattr(main, "reproduce_stored_prediction_score", lambda *_args, **_kwargs: (True, 0.4476, 2, "Reproduced"))
+
+    def schema_error(*_args, **_kwargs):
+        raise RuntimeError("Saved GraphSAGE edge schema is incompatible with checkout graph construction")
+
+    monkeypatch.setattr(main, "_build_live_gnn_graph", schema_error)
+    explanation = main.build_prediction_explanation(transaction, prediction, db=database)
+
+    assert explanation["graph_context"]["topology_validation_status"] == "UNVALIDATED_TOPOLOGY_MISMATCH"
+    assert explanation["graph_context"]["connected_neighbors"] is None
+    assert explanation["graph_context"]["live_topology"] == "Unavailable"
+
+
+def test_checkout_preparation_does_not_trust_deviceinfo_supplied_by_client():
+    user = User(name="No Device Buyer", email="no-device@example.test", hashed_password="test-hash")
+    features = main.prepare_checkout_model_features(
+        {"TransactionAmt": 20.0, "DeviceType": "desktop", "DeviceInfo": "Windows"},
+        user,
+        {"items": [{"product_id": "p1", "quantity": 1}]},
+    )
+    assert features["DeviceInfo"] == "UNKNOWN"
+    assert main.normalize_device_info(None, "desktop") == "UNKNOWN"
 
 
 def test_historical_transactions_retain_original_model_and_score_when_config_changes(database, monkeypatch):

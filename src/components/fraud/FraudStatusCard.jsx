@@ -16,6 +16,11 @@ const COPY = {
     body: 'This transaction is waiting for administrator review. Payment remains unavailable until the review is complete.',
     tone: 'warning',
   },
+  VERIFY: {
+    heading: 'Additional verification required',
+    body: 'Complete one fresh email verification for this checkout. We will recheck the existing assessment and available evidence before releasing payment.',
+    tone: 'warning',
+  },
   REJECT: {
     heading: 'Transaction rejected',
     body: 'An administrator rejected this transaction. It cannot proceed to payment.',
@@ -29,7 +34,13 @@ const COPY = {
 };
 
 function FraudStatusCard({ result }) {
-  const copy = COPY[result.decision] || COPY.REVIEW;
+  const copy = result.decision === 'REVIEW' && result.riskLevel === 'HIGH'
+    ? { ...COPY.REVIEW, heading: 'High risk transaction held for review', body: 'The score exceeded the high-risk threshold. Payment remains unavailable until an administrator reviews this transaction.' }
+    : result.decision === 'VERIFY' && result.riskLevel === 'MEDIUM'
+      ? COPY.VERIFY
+      : result.decision === 'REVIEW' && result.riskLevel === 'MEDIUM'
+        ? { ...COPY.REVIEW, body: 'This transaction remains held for review. No payment has been processed.' }
+      : COPY[result.decision] || COPY.REVIEW;
 
   return (
     <div className={`card card-padded fraud-status fraud-status-${copy.tone}`}>

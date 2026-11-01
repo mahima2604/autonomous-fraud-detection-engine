@@ -44,7 +44,8 @@ function Orders() {
               <th>Items</th>
               <th>Amount</th>
               <th>Status</th>
-              <th>Payment</th>
+              <th>Payment method</th>
+              <th>Payment status</th>
             </tr>
           </thead>
           <tbody>
@@ -55,7 +56,8 @@ function Orders() {
                 <td>{order.items?.join(', ')}</td>
                 <td>{formatCurrency(order.amount)}</td>
                 <td><span className={`badge ${STATUS_CLASS[order.status] || 'badge-neutral'}`}>{order.status}</span></td>
-                <td>{order.paymentStatus}</td>
+                <td>{order.paymentMethod === 'COD' ? 'Cash on Delivery (COD)' : order.paymentMethod === 'CARD' ? 'Credit / Debit Card' : order.paymentMethod === 'PAYPAL' ? 'PayPal' : order.paymentMethod === 'BANK_TRANSFER' ? 'Bank Transfer' : order.paymentMethod || '—'}</td>
+                <td>{order.paymentStatus === 'PENDING_CASH_COLLECTION' ? 'Cash due on delivery' : order.paymentStatus}</td>
               </tr>
             ))}
           </tbody>

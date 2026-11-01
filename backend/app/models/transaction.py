@@ -23,6 +23,7 @@ class Transaction(Base):
     reviewed_by_admin_id = Column(Integer, ForeignKey("admins.id"), nullable=True)
     reviewed_at = Column(DateTime, nullable=True)
     review_reason = Column(String, nullable=True)
+    risk_reassessment = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     user = relationship("User", back_populates="transactions")
